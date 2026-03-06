@@ -55,14 +55,64 @@ pkg install -y termux-api 2>/dev/null || \
 ok "Termux packages installed."
 
 # ══════════════════════════════════════════════════════════════════════
-#  3. Install Ubuntu 22.04 via proot-distro
+#  3. Choose Ubuntu version + install via proot-distro
 # ══════════════════════════════════════════════════════════════════════
-msg "Installing Ubuntu via proot-distro..."
-if proot-distro list 2>/dev/null | grep -q "ubuntu.*Installed"; then
-    ok "Ubuntu is already installed."
+msg "Detecting available Ubuntu versions..."
+
+# Discover Ubuntu-related aliases from proot-distro
+mapfile -t UBUNTU_ALIASES < <(proot-distro list 2>/dev/null \
+    | grep -i 'ubuntu' \
+    | awk '{print $1}' \
+    | sort)
+
+# Guarantee at least the well-known aliases are offered
+for _alias in ubuntu-oldlts ubuntu; do
+    if ! printf '%s\n' "${UBUNTU_ALIASES[@]}" | grep -qx "$_alias"; then
+        UBUNTU_ALIASES+=("$_alias")
+    fi
+done
+
+printf "\n  ${BOLD}Available Ubuntu versions:${NC}\n"
+for i in "${!UBUNTU_ALIASES[@]}"; do
+    _a="${UBUNTU_ALIASES[$i]}"
+    _tag=""
+    case "$_a" in
+        ubuntu-oldlts) _tag=" (22.04 LTS)" ;;
+        ubuntu)        _tag=" (latest — rolling)" ;;
+    esac
+    # Mark default
+    if [[ "$_a" == "ubuntu-oldlts" ]]; then
+        printf "  ${GREEN}[%d] %s%s  ← recommended${NC}\n" "$((i+1))" "$_a" "$_tag"
+    else
+        printf "  [%d] %s%s\n" "$((i+1))" "$_a" "$_tag"
+    fi
+done
+
+printf "\n  Enter number [default: ubuntu-oldlts (22.04 LTS)]: "
+read -r _choice
+
+# Resolve the selection
+UBUNTU_ALIAS=""
+if [[ -z "$_choice" ]]; then
+    UBUNTU_ALIAS="ubuntu-oldlts"
 else
-    proot-distro install ubuntu
-    ok "Ubuntu installed."
+    idx=$((_choice - 1))
+    if [[ "$idx" -ge 0 && "$idx" -lt "${#UBUNTU_ALIASES[@]}" ]]; then
+        UBUNTU_ALIAS="${UBUNTU_ALIASES[$idx]}"
+    else
+        warn "Invalid choice '$_choice' — defaulting to ubuntu-oldlts"
+        UBUNTU_ALIAS="ubuntu-oldlts"
+    fi
+fi
+
+ok "Selected: $UBUNTU_ALIAS"
+
+msg "Installing $UBUNTU_ALIAS via proot-distro..."
+if proot-distro list 2>/dev/null | grep -q "${UBUNTU_ALIAS}.*Installed"; then
+    ok "$UBUNTU_ALIAS is already installed."
+else
+    proot-distro install "$UBUNTU_ALIAS"
+    ok "$UBUNTU_ALIAS installed."
 fi
 
 # ══════════════════════════════════════════════════════════════════════
@@ -81,7 +131,7 @@ for candidate in "$SCRIPT_DIR/setup-proot.sh" "$HOME/setup-proot.sh"; do
     fi
 done
 
-UBUNTU_ROOT="$PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu"
+UBUNTU_ROOT="$PREFIX/var/lib/proot-distro/installed-rootfs/$UBUNTU_ALIAS"
 
 if [[ -n "$PROOT_SCRIPT" ]]; then
     cp "$PROOT_SCRIPT" "$UBUNTU_ROOT/root/setup-proot.sh"
@@ -193,7 +243,8 @@ proot-distro login ubuntu --shared-tmp \$PROOT_USB_ARGS -- bash -c "
 "
 LAUNCHER
 chmod +x "$HOME/start-ubuntu-vnc.sh"
-ok "VNC launcher created: ~/start-ubuntu-vnc.sh"
+sed -i "s|proot-distro login ubuntu|proot-distro login $UBUNTU_ALIAS|g" "$HOME/start-ubuntu-vnc.sh"
+ok "VNC launcher created: ~/start-ubuntu-vnc.sh (distro: $UBUNTU_ALIAS)"
 
 # ══════════════════════════════════════════════════════════════════════
 #  6. Create Termux:X11 launcher script
@@ -253,7 +304,8 @@ proot-distro login ubuntu --shared-tmp $PROOT_USB_ARGS -- bash -c "
 "
 LAUNCHER
 chmod +x "$HOME/start-ubuntu-x11.sh"
-ok "Termux:X11 launcher created: ~/start-ubuntu-x11.sh"
+sed -i "s|proot-distro login ubuntu|proot-distro login $UBUNTU_ALIAS|g" "$HOME/start-ubuntu-x11.sh"
+ok "Termux:X11 launcher created: ~/start-ubuntu-x11.sh (distro: $UBUNTU_ALIAS)"
 
 # ══════════════════════════════════════════════════════════════════════
 #  7. Create stop script
@@ -301,7 +353,8 @@ fi
 proot-distro login ubuntu $PROOT_USB_ARGS
 LOGIN
 chmod +x "$HOME/login-ubuntu.sh"
-ok "Shell login created: ~/login-ubuntu.sh"
+sed -i "s|proot-distro login ubuntu|proot-distro login $UBUNTU_ALIAS|g" "$HOME/login-ubuntu.sh"
+ok "Shell login created: ~/login-ubuntu.sh (distro: $UBUNTU_ALIAS)"
 
 # ══════════════════════════════════════════════════════════════════════
 #  Done
@@ -335,7 +388,7 @@ cat <<EOF
   Next steps:
 
     1. Enter Ubuntu proot:
-         proot-distro login ubuntu
+         proot-distro login $UBUNTU_ALIAS
 
     2. Run the proot setup script inside Ubuntu:
          bash /root/setup-proot.sh

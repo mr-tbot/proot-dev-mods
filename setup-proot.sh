@@ -84,8 +84,20 @@ ok "System updated."
 # ══════════════════════════════════════════════════════════════════════
 msg "Installing XFCE desktop environment + TigerVNC..."
 
+# NOTE: We deliberately avoid xfce4-goodies because it pulls in
+# elementary-xfce-icon-theme, which is enormous (10k+ icons) and
+# hangs for a very long time (or indefinitely) during dpkg unpack
+# inside proot.  Instead we install the useful goodies plugins
+# individually below.
+
 DEBIAN_FRONTEND=noninteractive apt-get install -y \
-    xfce4 xfce4-goodies xfce4-terminal \
+    -o Dpkg::Options::="--force-confdef" \
+    -o Dpkg::Options::="--force-confold" \
+    xfce4 xfce4-terminal \
+    xfce4-whiskermenu-plugin xfce4-clipman-plugin \
+    xfce4-screenshooter xfce4-taskmanager \
+    xfce4-notifyd xfce4-power-manager \
+    thunar-archive-plugin \
     dbus dbus-x11 \
     tigervnc-standalone-server tigervnc-common \
     xfonts-base xfonts-100dpi xfonts-75dpi \
