@@ -74,8 +74,8 @@ if [[ -f "$SOURCES" ]]; then
 fi
 
 msg "Running apt update & upgrade..."
-apt-get update -y 2>&1 | tail -5
-apt-get upgrade -y 2>&1 | tail -5
+apt-get update -y
+apt-get upgrade -y
 ok "System updated."
 
 
@@ -95,8 +95,7 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y \
     locales \
     pulseaudio libpulse0 alsa-utils \
     xfce4-pulseaudio-plugin pavucontrol \
-    libusb-1.0-0 usbutils \
-    2>&1 | tail -10
+    libusb-1.0-0 usbutils
 
 ok "XFCE desktop + TigerVNC + PulseAudio + USB tools installed."
 
@@ -146,7 +145,7 @@ if command -v code >/dev/null 2>&1; then
     ok "VSCode already installed: $(code --version 2>/dev/null | head -1)"
 else
     # Install prerequisites
-    apt-get install -y wget gpg apt-transport-https ca-certificates 2>/dev/null
+    apt-get install -y wget gpg apt-transport-https ca-certificates
 
     # Add Microsoft GPG key
     if [[ ! -f /usr/share/keyrings/microsoft-archive-keyring.gpg ]]; then
@@ -166,7 +165,7 @@ else
     apt-get update -qq
     DEBIAN_FRONTEND=noninteractive apt-get install -y \
         libsecret-1-0 libgbm1 libasound2 libxss1 libnss3 \
-        libatk-bridge2.0-0 libgtk-3-0 gnome-keyring code 2>&1 | tail -5
+        libatk-bridge2.0-0 libgtk-3-0 gnome-keyring code
     ok "VSCode installed."
 fi
 
@@ -255,8 +254,8 @@ msg "Installing Chromium..."
 if command -v chromium-browser >/dev/null 2>&1 || command -v chromium >/dev/null 2>&1; then
     ok "Chromium already installed."
 else
-    DEBIAN_FRONTEND=noninteractive apt-get install -y chromium-browser 2>/dev/null || \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y chromium 2>/dev/null || {
+    DEBIAN_FRONTEND=noninteractive apt-get install -y chromium-browser || \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y chromium || {
         err "Failed to install Chromium. Try manually: apt install chromium-browser"
     }
     ok "Chromium installed."
