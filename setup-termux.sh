@@ -154,7 +154,86 @@ for candidate in "$SCRIPT_DIR/proot-backup.sh" "$HOME/proot-backup.sh"; do
 done
 
 # ══════════════════════════════════════════════════════════════════════
-#  5. Create VNC launcher script
+#  5. Configure display resolution presets
+# ══════════════════════════════════════════════════════════════════════
+msg "Configuring display resolution presets..."
+
+RESOLUTION_CONF="$HOME/.proot-resolutions.conf"
+
+printf "\n  ${BOLD}Set up your resolution presets${NC}\n"
+printf "  ${DIM}These will be offered as choices each time you start the desktop.${NC}\n"
+printf "  ${DIM}You can add as many as you like (phone, tablet, folding, remote, etc).${NC}\n\n"
+
+# Offer common defaults
+printf "  ${BOLD}Common resolutions:${NC}\n"
+printf "  ${DIM}  Phone portrait:    1080x2400${NC}\n"
+printf "  ${DIM}  Phone landscape:   2400x1080${NC}\n"
+printf "  ${DIM}  Fold inner:        1812x2176${NC}\n"
+printf "  ${DIM}  Fold outer:        904x2316${NC}\n"
+printf "  ${DIM}  Tablet:            1600x2560${NC}\n"
+printf "  ${DIM}  Small desktop:     1280x720${NC}\n"
+printf "  ${DIM}  Full HD:           1920x1080${NC}\n"
+printf "  ${DIM}  QHD:               2560x1440${NC}\n\n"
+
+PRESETS=()
+DEFAULT_PRESET=""
+_preset_idx=0
+
+while true; do
+    _preset_idx=$((_preset_idx + 1))
+    if [[ $_preset_idx -eq 1 ]]; then
+        printf "  Enter resolution #%d (e.g. 1920x1080) [default: 1920x1080]: " "$_preset_idx"
+    else
+        printf "  Enter resolution #%d (or press Enter to finish): " "$_preset_idx"
+    fi
+    read -r _res
+
+    # First entry defaults to 1920x1080
+    if [[ -z "$_res" && $_preset_idx -eq 1 ]]; then
+        _res="1920x1080"
+    elif [[ -z "$_res" ]]; then
+        break
+    fi
+
+    # Validate format
+    if ! echo "$_res" | grep -qE '^[0-9]+x[0-9]+$'; then
+        warn "Invalid format '$_res' — use WIDTHxHEIGHT (e.g. 1920x1080)"
+        _preset_idx=$((_preset_idx - 1))
+        continue
+    fi
+
+    # Ask for a label
+    printf "  Give it a name (e.g. 'Phone', 'Desktop') [default: Preset %d]: " "$_preset_idx"
+    read -r _label
+    [[ -z "$_label" ]] && _label="Preset $_preset_idx"
+
+    PRESETS+=("${_label}|${_res}")
+
+    # First preset is the default
+    [[ -z "$DEFAULT_PRESET" ]] && DEFAULT_PRESET="$_res"
+
+    ok "Added: $_label → $_res"
+done
+
+# If user added nothing, use a sensible default
+if [[ ${#PRESETS[@]} -eq 0 ]]; then
+    PRESETS=("Full HD|1920x1080")
+    DEFAULT_PRESET="1920x1080"
+    ok "Using default: Full HD → 1920x1080"
+fi
+
+# Write the config file
+printf "# Proot Desktop — Resolution Presets\n" > "$RESOLUTION_CONF"
+printf "# Format: LABEL|WIDTHxHEIGHT\n" >> "$RESOLUTION_CONF"
+printf "# First entry is the default. Edit anytime.\n" >> "$RESOLUTION_CONF"
+for p in "${PRESETS[@]}"; do
+    echo "$p" >> "$RESOLUTION_CONF"
+done
+ok "Resolution presets saved to ~/.proot-resolutions.conf"
+printf "  ${DIM}(Edit ~/.proot-resolutions.conf anytime to change presets)${NC}\n"
+
+# ══════════════════════════════════════════════════════════════════════
+#  6. Create VNC launcher script
 # ══════════════════════════════════════════════════════════════════════
 msg "Creating VNC launcher: ~/start-ubuntu-vnc.sh"
 
@@ -164,16 +243,77 @@ cat > "$HOME/start-ubuntu-vnc.sh" <<'LAUNCHER'
 #  start-ubuntu-vnc.sh — Start Ubuntu proot + TigerVNC server
 # ─────────────────────────────────────────────────────────────
 #  Usage:
-#    bash ~/start-ubuntu-vnc.sh              # default: display :1, 1920x1080
-#    bash ~/start-ubuntu-vnc.sh 1 1280x720   # custom display + resolution
+#    bash ~/start-ubuntu-vnc.sh              # interactive resolution picker
+#    bash ~/start-ubuntu-vnc.sh 1920x1080    # skip picker, use this resolution
+#    bash ~/start-ubuntu-vnc.sh 1920x1080 2  # custom resolution + display number
 #
 #  Then connect with VNC viewer to localhost:5901
 # ─────────────────────────────────────────────────────────────
 set -euo pipefail
 
-DISPLAY_NUM="${1:-1}"
+CONF="$HOME/.proot-resolutions.conf"
+
+pick_resolution() {
+    if [[ ! -f "$CONF" ]]; then
+        echo "1920x1080"
+        return
+    fi
+
+    # Read presets (skip comments/blanks)
+    local presets=()
+    while IFS= read -r line; do
+        [[ "$line" =~ ^#.*$ || -z "$line" ]] && continue
+        presets+=("$line")
+    done < "$CONF"
+
+    if [[ ${#presets[@]} -eq 0 ]]; then
+        echo "1920x1080"
+        return
+    fi
+
+    if [[ ${#presets[@]} -eq 1 ]]; then
+        echo "${presets[0]##*|}"
+        return
+    fi
+
+    echo "" >&2
+    echo "  Select resolution:" >&2
+    echo "" >&2
+    for i in "${!presets[@]}"; do
+        local label="${presets[$i]%%|*}"
+        local res="${presets[$i]##*|}"
+        if [[ $i -eq 0 ]]; then
+            printf "  [%d] %-20s %s  ← default\n" "$((i+1))" "$label" "$res" >&2
+        else
+            printf "  [%d] %-20s %s\n" "$((i+1))" "$label" "$res" >&2
+        fi
+    done
+    echo "" >&2
+    printf "  Choice [1]: " >&2
+    read -r choice
+
+    if [[ -z "$choice" ]]; then
+        echo "${presets[0]##*|}"
+    else
+        local idx=$((choice - 1))
+        if [[ $idx -ge 0 && $idx -lt ${#presets[@]} ]]; then
+            echo "${presets[$idx]##*|}"
+        else
+            echo "${presets[0]##*|}"
+        fi
+    fi
+}
+
+# Allow resolution as first arg, display as second
+if [[ -n "${1:-}" && "${1:-}" =~ ^[0-9]+x[0-9]+$ ]]; then
+    RESOLUTION="$1"
+    DISPLAY_NUM="${2:-1}"
+else
+    RESOLUTION="$(pick_resolution)"
+    DISPLAY_NUM="${1:-1}"
+fi
+
 VNC_PORT=$((5900 + DISPLAY_NUM))
-RESOLUTION="${2:-1920x1080}"
 
 echo ""
 echo "  Starting Ubuntu Desktop (VNC)..."
@@ -195,12 +335,12 @@ pulseaudio --start \
 
 # Launch proot-distro with Ubuntu and start VNC inside it
 # Build proot args: bind USB if the host device path exists
-PROOT_USB_ARGS=""
+PROOT_ARGS="--shared-tmp"
 if [[ -d /dev/bus/usb ]]; then
-    PROOT_USB_ARGS="--bind /dev/bus/usb:/dev/bus/usb"
+    PROOT_ARGS="$PROOT_ARGS --bind /dev/bus/usb:/dev/bus/usb"
 fi
 
-proot-distro login ubuntu --shared-tmp \$PROOT_USB_ARGS -- bash -c "
+proot-distro login ubuntu $PROOT_ARGS -- bash -c "
     export DISPLAY=:${DISPLAY_NUM}
     export PULSE_SERVER=127.0.0.1
 
@@ -230,9 +370,11 @@ proot-distro login ubuntu --shared-tmp \$PROOT_USB_ARGS -- bash -c "
     echo '  ✔ VNC server started!'
     echo \"  Connect to: localhost:${VNC_PORT}\"
     echo \"  Resolution: ${RESOLUTION}\"
-    echo ''    echo '  Sound: plays through Android speakers (PulseAudio TCP)'
+    echo ''
+    echo '  Sound: plays through Android speakers (PulseAudio TCP)'
     echo '  USB:   OTG devices accessible if Termux has USB permission'
-    echo ''    echo '  Open RealVNC Viewer → New Connection → localhost:${VNC_PORT}'
+    echo ''
+    echo '  Open RealVNC Viewer → New Connection → localhost:${VNC_PORT}'
     echo ''
     echo '  Press Ctrl+C to stop.'
     echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'
@@ -247,7 +389,7 @@ sed -i "s|proot-distro login ubuntu|proot-distro login $UBUNTU_ALIAS|g" "$HOME/s
 ok "VNC launcher created: ~/start-ubuntu-vnc.sh (distro: $UBUNTU_ALIAS)"
 
 # ══════════════════════════════════════════════════════════════════════
-#  6. Create Termux:X11 launcher script
+#  7. Create Termux:X11 launcher script
 # ══════════════════════════════════════════════════════════════════════
 msg "Creating Termux:X11 launcher: ~/start-ubuntu-x11.sh"
 
@@ -286,12 +428,12 @@ am start --user 0 -n com.termux.x11/com.termux.x11.MainActivity 2>/dev/null || \
 
 # Enter proot and start XFCE
 # Build proot args: bind USB if the host device path exists
-PROOT_USB_ARGS=""
+PROOT_ARGS="--shared-tmp"
 if [[ -d /dev/bus/usb ]]; then
-    PROOT_USB_ARGS="--bind /dev/bus/usb:/dev/bus/usb"
+    PROOT_ARGS="$PROOT_ARGS --bind /dev/bus/usb:/dev/bus/usb"
 fi
 
-proot-distro login ubuntu --shared-tmp $PROOT_USB_ARGS -- bash -c "
+proot-distro login ubuntu $PROOT_ARGS -- bash -c "
     export DISPLAY=:0
     export PULSE_SERVER=127.0.0.1
 
@@ -308,7 +450,7 @@ sed -i "s|proot-distro login ubuntu|proot-distro login $UBUNTU_ALIAS|g" "$HOME/s
 ok "Termux:X11 launcher created: ~/start-ubuntu-x11.sh (distro: $UBUNTU_ALIAS)"
 
 # ══════════════════════════════════════════════════════════════════════
-#  7. Create stop script
+#  8. Create stop script
 # ══════════════════════════════════════════════════════════════════════
 msg "Creating stop script: ~/stop-ubuntu.sh"
 
@@ -338,7 +480,7 @@ chmod +x "$HOME/stop-ubuntu.sh"
 ok "Stop script created: ~/stop-ubuntu.sh"
 
 # ══════════════════════════════════════════════════════════════════════
-#  8. Create shell-only login script
+#  9. Create shell-only login script
 # ══════════════════════════════════════════════════════════════════════
 msg "Creating shell-only login: ~/login-ubuntu.sh"
 
@@ -346,11 +488,11 @@ cat > "$HOME/login-ubuntu.sh" <<'LOGIN'
 #!/data/data/com.termux/files/usr/bin/bash
 # Quick login to Ubuntu proot (no desktop, just a shell)
 # Bind USB if available
-PROOT_USB_ARGS=""
+PROOT_ARGS=""
 if [[ -d /dev/bus/usb ]]; then
-    PROOT_USB_ARGS="--bind /dev/bus/usb:/dev/bus/usb"
+    PROOT_ARGS="--bind /dev/bus/usb:/dev/bus/usb"
 fi
-proot-distro login ubuntu $PROOT_USB_ARGS
+proot-distro login ubuntu $PROOT_ARGS
 LOGIN
 chmod +x "$HOME/login-ubuntu.sh"
 sed -i "s|proot-distro login ubuntu|proot-distro login $UBUNTU_ALIAS|g" "$HOME/login-ubuntu.sh"
