@@ -334,13 +334,13 @@ pulseaudio --start \
     --exit-idle-time=-1 2>/dev/null || true
 
 # Launch proot-distro with Ubuntu and start VNC inside it
-# Build proot args: bind USB if the host device path exists
-PROOT_ARGS="--shared-tmp"
+# Build proot args: share /tmp and bind USB if available
+PROOT_ARGS=""
 if [[ -d /dev/bus/usb ]]; then
-    PROOT_ARGS="$PROOT_ARGS --bind /dev/bus/usb:/dev/bus/usb"
+    PROOT_ARGS="--bind /dev/bus/usb:/dev/bus/usb"
 fi
 
-proot-distro login ubuntu $PROOT_ARGS -- bash -c "
+proot-distro login ubuntu --shared-tmp $PROOT_ARGS -- bash -c "
     export DISPLAY=:${DISPLAY_NUM}
     export PULSE_SERVER=127.0.0.1
 
@@ -427,13 +427,13 @@ am start --user 0 -n com.termux.x11/com.termux.x11.MainActivity 2>/dev/null || \
     echo "  ⚠ Could not auto-launch Termux:X11 app. Open it manually."
 
 # Enter proot and start XFCE
-# Build proot args: bind USB if the host device path exists
-PROOT_ARGS="--shared-tmp"
+# Build proot args: share /tmp and bind USB if available
+PROOT_ARGS=""
 if [[ -d /dev/bus/usb ]]; then
-    PROOT_ARGS="$PROOT_ARGS --bind /dev/bus/usb:/dev/bus/usb"
+    PROOT_ARGS="--bind /dev/bus/usb:/dev/bus/usb"
 fi
 
-proot-distro login ubuntu $PROOT_ARGS -- bash -c "
+proot-distro login ubuntu --shared-tmp $PROOT_ARGS -- bash -c "
     export DISPLAY=:0
     export PULSE_SERVER=127.0.0.1
 
