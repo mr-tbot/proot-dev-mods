@@ -200,6 +200,10 @@ printf "\n${BOLD}Phase 3: Preparing Chromium v89 download...${NC}\n\n"
 rm -f /etc/apt/sources.list.d/debian-chromium.sources /etc/apt/sources.list.d/debian-chromium.list 2>/dev/null || true
 ok "Buster repo cleanup complete"
 
+# Ensure Ubuntu's libxml2 is installed (Chromium links libxml2.so.2,
+# which is the same soname Ubuntu provides — just needs to be present)
+apt-get install -y libxml2 2>/dev/null || true
+
 
 # ══════════════════════════════════════════════════════════════════════
 #  PHASE 4: Download Chromium v89 + compat libraries
@@ -236,6 +240,20 @@ wget -q "${_BASE}/x/x264/libx264-155_0.155.2917+git0a84d98-2_${DEB_ARCH}.deb"   
 wget -q "${_BASE}/x/x265/libx265-165_2.9-4_${DEB_ARCH}.deb"                                -O "$_DEB_DIR/libx265-165.deb"       && ok "libx265-165"
 wget -q "${_BASE}/libs/libssh/libssh-gcrypt-4_0.8.7-1+deb10u1_${DEB_ARCH}.deb"             -O "$_DEB_DIR/libssh-gcrypt-4.deb"   && ok "libssh-gcrypt-4"
 
+# Additional compat libraries — Chromium v89 links these sonames which
+# differ between Buster and Ubuntu (without these, Chromium crashes
+# with "cannot open shared object file")
+wget -q "${_BASE}/libw/libwebp/libwebp6_0.6.1-2+deb10u1_${DEB_ARCH}.deb"                  -O "$_DEB_DIR/libwebp6.deb" \
+    || wget -q "${_BASE}/libw/libwebp/libwebp6_0.6.1-2_${DEB_ARCH}.deb"                    -O "$_DEB_DIR/libwebp6.deb"
+[[ -s "$_DEB_DIR/libwebp6.deb" ]] && ok "libwebp6" || err "libwebp6 download failed"
+wget -q "${_BASE}/libj/libjpeg-turbo/libjpeg62-turbo_1.5.2-2+deb10u1_${DEB_ARCH}.deb"      -O "$_DEB_DIR/libjpeg62-turbo.deb" \
+    || wget -q "${_BASE}/libj/libjpeg-turbo/libjpeg62-turbo_1.5.2-2+b1_${DEB_ARCH}.deb"    -O "$_DEB_DIR/libjpeg62-turbo.deb" \
+    || wget -q "${_BASE}/libj/libjpeg-turbo/libjpeg62-turbo_1.5.2-2_${DEB_ARCH}.deb"       -O "$_DEB_DIR/libjpeg62-turbo.deb"
+[[ -s "$_DEB_DIR/libjpeg62-turbo.deb" ]] && ok "libjpeg62-turbo" || err "libjpeg62-turbo download failed"
+wget -q "${_BASE}/f/flac/libflac8_1.3.2-3+deb10u1_${DEB_ARCH}.deb"                         -O "$_DEB_DIR/libflac8.deb" \
+    || wget -q "${_BASE}/f/flac/libflac8_1.3.2-3_${DEB_ARCH}.deb"                          -O "$_DEB_DIR/libflac8.deb"
+[[ -s "$_DEB_DIR/libflac8.deb" ]] && ok "libflac8" || err "libflac8 download failed"
+
 # Verify all downloads (wget -q hides failures silently)
 _DOWNLOAD_OK=1
 for _f in "$_DEB_DIR"/*.deb; do
@@ -270,7 +288,10 @@ dpkg --force-depends -i \
     "$_DEB_DIR/libx265-165.deb" \
     "$_DEB_DIR/libavcodec58.deb" \
     "$_DEB_DIR/libavformat58.deb" \
-    "$_DEB_DIR/libssh-gcrypt-4.deb" 2>&1
+    "$_DEB_DIR/libssh-gcrypt-4.deb" \
+    "$_DEB_DIR/libwebp6.deb" \
+    "$_DEB_DIR/libjpeg62-turbo.deb" \
+    "$_DEB_DIR/libflac8.deb" 2>&1
 ok "Buster compat libraries installed"
 
 
@@ -382,7 +403,7 @@ fi
 
 # Verify /usr/bin/chromium is the stock Debian launcher
 if [[ -f /usr/bin/chromium ]]; then
-    if head -20 /usr/bin/chromium 2>/dev/null | grep -q "chromium.d\|CHROMIUM_FLAGS"; then
+    if head -30 /usr/bin/chromium 2>/dev/null | grep -qE "chromium\.d|CHROMIUM_FLAGS|/usr/lib/chromium"; then
         ok "Stock Debian launcher verified at /usr/bin/chromium"
     else
         warn "/usr/bin/chromium may not be the stock Debian launcher — check manually"
@@ -437,8 +458,32 @@ apt-mark hold \
     libevent-2.1-6 libicu63 libjsoncpp1 libre2-5 libvpx5 \
     libavcodec58 libavformat58 libavutil56 libswresample3 \
     libaom0 libcodec2-0.8.1 libx264-155 libx265-165 \
-    libssh-gcrypt-4 2>/dev/null || true
-ok "Chromium + 14 Buster compat packages held (protected from apt-get install -f)"
+    libssh-gcrypt-4 \
+    libwebp6 libjpeg62-turbo libflac8 2>/dev/null || true
+ok "Chromium + 17 Buster compat packages held (protected from apt-get install -f)"
+
+# Create dummy transitional package for libgdk-pixbuf2.0-0
+# (Debian Buster package name — Ubuntu uses libgdk-pixbuf-2.0-0 instead).
+# This satisfies dpkg's dependency tracking so apt can install other packages.
+if ! dpkg -s libgdk-pixbuf2.0-0 >/dev/null 2>&1; then
+    _DUMMY_DIR="/tmp/libgdk-pixbuf2.0-0-dummy"
+    mkdir -p "$_DUMMY_DIR/DEBIAN"
+    cat > "$_DUMMY_DIR/DEBIAN/control" <<GDKCTRL
+Package: libgdk-pixbuf2.0-0
+Version: 99.0~proot-dummy
+Architecture: $DEB_ARCH
+Description: Transitional dummy — satisfies Buster chromium dep
+Maintainer: proot-setup
+GDKCTRL
+    dpkg-deb --build "$_DUMMY_DIR" /tmp/libgdk-pixbuf2.0-0-dummy.deb 2>/dev/null
+    dpkg -i /tmp/libgdk-pixbuf2.0-0-dummy.deb 2>/dev/null || true
+    apt-mark hold libgdk-pixbuf2.0-0 2>/dev/null || true
+    rm -rf "$_DUMMY_DIR" /tmp/libgdk-pixbuf2.0-0-dummy.deb
+    ok "Dummy libgdk-pixbuf2.0-0 package created (satisfies chromium dep)."
+fi
+
+# Clear any broken dpkg state so subsequent apt-get install (e.g. Firefox) works
+dpkg --configure -a 2>/dev/null || true
 
 # ── Chromium smoke test ───────────────────────────────────────────────
 # Actually launch Chromium headless to prove the binary + flags + launcher
