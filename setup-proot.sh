@@ -24,6 +24,17 @@ warn() { printf "  ${YELLOW}⚠${NC} %s\n" "$*"; }
 err()  { printf "  ${RED}✖${NC} %s\n" "$*"; }
 skip() { printf "  ${DIM}─ %s (already installed)${NC}\n" "$*"; }
 
+# ── Install log ───────────────────────────────────────────────────────
+# Everything printed to stdout/stderr is also captured in the log file.
+# The log persists across re-runs (appended) for full troubleshooting.
+LOG_FILE="/var/log/proot-setup.log"
+mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
+exec > >(tee -a "$LOG_FILE") 2>&1
+echo ""
+echo "═══════════════════════════════════════════════════════════════"
+echo "  proot-setup.sh started: $(date)"
+echo "═══════════════════════════════════════════════════════════════"
+
 # ── Helper: check if a dpkg package is installed ─────────────────────
 _is_installed() { dpkg -s "$1" &>/dev/null; }
 
@@ -1587,6 +1598,37 @@ PROOTFLAGS
         libaom0 libcodec2-0.8.1 libx264-155 libx265-165 \
         libssh-gcrypt-4 2>/dev/null || true
     ok "Chromium + 14 Buster compat packages held (protected from apt-get install -f)."
+
+    # ── Step 12: Chromium smoke test ──────────────────────────────────
+    # Actually launch Chromium headless to prove the binary + flags + launcher
+    # all work end-to-end.  If this fails, something is fundamentally broken.
+    msg "Running Chromium headless smoke test..."
+    _smoke_ok=0
+    _smoke_out=""
+    _smoke_out="$(timeout 30 chromium \
+        --headless --disable-gpu --no-sandbox --no-zygote \
+        --disable-software-rasterizer --disable-dev-shm-usage \
+        --dump-dom about:blank 2>&1)" && _smoke_ok=1 || true
+
+    if [[ "$_smoke_ok" -eq 1 ]] && echo "$_smoke_out" | grep -qi "<html"; then
+        ok "Chromium smoke test PASSED (headless --dump-dom returned HTML)."
+    else
+        warn "Chromium smoke test: headless --dump-dom did not return expected HTML."
+        warn "This may be normal in proot (missing /dev nodes, no display)."
+        warn "Smoke test output (last 5 lines):"
+        echo "$_smoke_out" | tail -5
+
+        # Fallback: verify the binary at least starts and prints version
+        _ver_out=""
+        _ver_out="$(timeout 10 /usr/lib/chromium/chromium --version 2>&1)" || true
+        if echo "$_ver_out" | grep -qi "chromium"; then
+            ok "Chromium binary responds to --version: $_ver_out"
+        else
+            err "Chromium binary did not respond to --version."
+            err "Output: $_ver_out"
+            err "Chromium may not work. Check log: $LOG_FILE"
+        fi
+    fi
 
     # ── Chromium .desktop file ────────────────────────────────────────
     # The stock Debian launcher sources /etc/chromium.d/proot-flags

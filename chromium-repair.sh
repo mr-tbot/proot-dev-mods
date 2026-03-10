@@ -20,6 +20,16 @@ warn() { printf "  ${YELLOW}⚠${NC} %s\n" "$*"; }
 err()  { printf "  ${RED}✘${NC} %s\n" "$*"; }
 die()  { err "$*"; exit 1; }
 
+# ── Repair log ────────────────────────────────────────────────────────
+# Everything printed to stdout/stderr is also captured in the log file.
+LOG_FILE="/var/log/proot-browser-repair.log"
+mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
+exec > >(tee -a "$LOG_FILE") 2>&1
+echo ""
+echo "═══════════════════════════════════════════════════════════════"
+echo "  chromium-repair.sh started: $(date)"
+echo "═══════════════════════════════════════════════════════════════"
+
 printf "\n${BOLD}╔════════════════════════════════════════════════════════════╗${NC}\n"
 printf "${BOLD}║   Browser Repair — Proot Ubuntu                           ║${NC}\n"
 printf "${BOLD}║   Chromium v89 / Firefox / Both                           ║${NC}\n"
@@ -86,11 +96,25 @@ if command -v snap >/dev/null 2>&1; then
     ok "Snap browser packages removed"
 fi
 
-# Remove snap stubs for chromium + firefox
-msg "Removing snap stubs..."
+# Remove snap stubs for chromium (always safe — we never want these)
+msg "Removing chromium snap stubs..."
 apt-get purge -y chromium-browser chromium-browser-l10n \
     chromium-codecs-ffmpeg chromium-codecs-ffmpeg-extra 2>/dev/null || true
-apt-get purge -y firefox 2>/dev/null || true
+
+# For Firefox: ONLY purge if it's a snap stub (preserve working Mozilla APT installs)
+_ff_is_snap_stub=0
+if dpkg -s firefox 2>/dev/null | grep -q "Status: install ok installed"; then
+    if head -20 /usr/bin/firefox 2>/dev/null | grep -qi "snap"; then
+        _ff_is_snap_stub=1
+    elif ! [[ -f /etc/apt/sources.list.d/mozilla-firefox.list ]]; then
+        # Installed but no Mozilla repo configured → Ubuntu's snap stub
+        _ff_is_snap_stub=1
+    fi
+fi
+if [[ "$_ff_is_snap_stub" -eq 1 ]]; then
+    msg "Removing Firefox snap stub..."
+    apt-get purge -y firefox 2>/dev/null || true
+fi
 for _bin in /usr/bin/chromium-browser /usr/bin/chromium /usr/bin/firefox; do
     if [[ -f "$_bin" ]] && head -20 "$_bin" 2>/dev/null | grep -qi "snap"; then
         rm -f "$_bin"
@@ -107,12 +131,14 @@ rm -f /usr/bin/chromium.real 2>/dev/null || true
 ok "Old Chromium removed"
 
 # Clean up old repo configs
+# NOTE: Only delete Buster + Chrome repos (these contaminate apt).
+# Mozilla Firefox repo/key/pin are NOT stale — they are set up by this
+# script and needed for Firefox updates. Do NOT delete them.
 rm -f /etc/apt/sources.list.d/debian-chromium.list 2>/dev/null || true
-rm -f /etc/apt/sources.list.d/mozilla-firefox.list 2>/dev/null || true
+rm -f /etc/apt/sources.list.d/google-chrome.list 2>/dev/null || true
 rm -f /etc/apt/preferences.d/debian-chromium.pref 2>/dev/null || true
-rm -f /etc/apt/preferences.d/mozilla-firefox.pref 2>/dev/null || true
 rm -f /usr/share/keyrings/debian-archive-all.gpg 2>/dev/null || true
-rm -f /usr/share/keyrings/packages.mozilla.org.gpg 2>/dev/null || true
+rm -f /usr/share/keyrings/google-chrome.gpg 2>/dev/null || true
 rm -f /etc/apt/trusted.gpg.d/debian*.gpg 2>/dev/null || true
 
 apt-get autoremove -y 2>/dev/null || true
@@ -414,6 +440,37 @@ apt-mark hold \
     libssh-gcrypt-4 2>/dev/null || true
 ok "Chromium + 14 Buster compat packages held (protected from apt-get install -f)"
 
+# ── Chromium smoke test ───────────────────────────────────────────────
+# Actually launch Chromium headless to prove the binary + flags + launcher
+# all work end-to-end.  If this fails, something is fundamentally broken.
+msg "Running Chromium headless smoke test..."
+_smoke_ok=0
+_smoke_out=""
+_smoke_out="$(timeout 30 chromium \
+    --headless --disable-gpu --no-sandbox --no-zygote \
+    --disable-software-rasterizer --disable-dev-shm-usage \
+    --dump-dom about:blank 2>&1)" && _smoke_ok=1 || true
+
+if [[ "$_smoke_ok" -eq 1 ]] && echo "$_smoke_out" | grep -qi "<html"; then
+    ok "Chromium smoke test PASSED (headless --dump-dom returned HTML)."
+else
+    warn "Chromium smoke test: headless --dump-dom did not return expected HTML."
+    warn "This may be normal in proot (missing /dev nodes, no display)."
+    warn "Smoke test output (last 5 lines):"
+    echo "$_smoke_out" | tail -5
+
+    # Fallback: verify the binary at least starts and prints version
+    _ver_out=""
+    _ver_out="$(timeout 10 /usr/lib/chromium/chromium --version 2>&1)" || true
+    if echo "$_ver_out" | grep -qi "chromium"; then
+        ok "Chromium binary responds to --version: $_ver_out"
+    else
+        err "Chromium binary did not respond to --version."
+        err "Output: $_ver_out"
+        err "Chromium may not work. Check log: $LOG_FILE"
+    fi
+fi
+
 # .desktop file — stock launcher sources proot-flags automatically
 cat > /usr/share/applications/chromium.desktop <<'CHROMDESK'
 [Desktop Entry]
@@ -456,9 +513,14 @@ if [[ "$INSTALL_FIREFOX" -eq 1 ]]; then
 
 printf "\n${BOLD}Firefox Repair: Installing from Mozilla APT...${NC}\n\n"
 
-# Remove any existing Firefox (snap stub or broken install)
-msg "Removing old Firefox..."
-apt-get purge -y firefox 2>/dev/null || true
+# Remove old Firefox ONLY if it's a snap stub or the user explicitly
+# chose to repair Firefox (this section only runs when INSTALL_FIREFOX=1).
+# Because this is a repair script, we do a clean reinstall of Firefox.
+msg "Removing old Firefox for clean reinstall..."
+# Only purge the dpkg package if it's actually installed
+if dpkg -s firefox 2>/dev/null | grep -q "Status: install ok installed"; then
+    apt-get purge -y firefox 2>/dev/null || true
+fi
 for _bin in /usr/bin/firefox; do
     if [[ -f "$_bin" ]] && head -20 "$_bin" 2>/dev/null | grep -qi "snap"; then
         rm -f "$_bin"
