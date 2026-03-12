@@ -2,9 +2,26 @@
 
 Run a full **XFCE desktop** with **VSCode**, **Chromium/Firefox**, **Chrome if on compatible chipset**, development tools, media editors, network utilities, **Wine**, and **cloud storage** (Google Drive & Dropbox) on Android — no root required.
 
+
+![proot-dev-mods](https://github.com/user-attachments/assets/84dfd64c-6c12-4857-b03f-79859d68243a)
+Runs on majority of Android hardware - including this tiny phone!
+
+
 Uses `proot-distro` to install Ubuntu, then applies sandbox/GPU/keyring mods that Electron, Chromium, and Wine need to function inside proot.
 
 ---
+
+## ❤️ Support ongoing MR-TBOT.com / CODEDATDA.casa Development — Keep the Lights On
+
+Proot-Dev-Mods is built and maintained by **one developer** with the help of AI tools. There is no corporate sponsor, no VC funding — just late nights, community feedback, and a passion for open-source software.
+
+If Proot-Dev-Mods has been useful to you — **please consider making a donation.** Every contribution, no matter the size, directly fuels continued development, bug fixes, and keeping this project free and open-source for everyone.
+
+### Donate via PayPal (Preferred)
+
+[![Donate via PayPal](https://img.shields.io/badge/Donate-PayPal-blue.svg?logo=paypal&style=for-the-badge)](https://www.paypal.com/donate/?business=7DQWLBARMM3FE&no_recurring=0&item_name=Support+the+development+and+growth+of+innovative+MR_TBOT+projects.&currency_code=USD)
+
+[**Click here to donate via PayPal**](https://www.paypal.com/donate/?business=7DQWLBARMM3FE&no_recurring=0&item_name=Support+the+development+and+growth+of+innovative+MR_TBOT+projects.&currency_code=USD)
 
 ## What You Get
 
