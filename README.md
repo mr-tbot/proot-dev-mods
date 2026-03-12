@@ -1,14 +1,16 @@
 # Proot Dev Mods — Ubuntu Desktop on Android via Termux
 
-Run a full **XFCE desktop** with **VSCode**, **Chromium/Firefox** (user choice), **Chrome**, development tools, media editors, network utilities, **Wine**, and **Google Drive sync** on Android — no root required.
+Run a full **XFCE desktop** with **VSCode**, **Chromium/Firefox**, **Chrome**, development tools, media editors, network utilities, **Wine**, and **cloud storage** (Google Drive & Dropbox) on Android — no root required.
 
 Uses `proot-distro` to install Ubuntu, then applies sandbox/GPU/keyring mods that Electron, Chromium, and Wine need to function inside proot.
+
+---
 
 ## What You Get
 
 | Category | Apps & Features |
 |---|---|
-| **OS** | Ubuntu 22.04 LTS or latest (user choice) via `proot-distro` |
+| **OS** | Ubuntu 22.04 LTS or latest (as of writing - 25.10) (user choice) via `proot-distro` |
 | **Desktop** | XFCE4 — dark theme, Humanity icons, bottom dock panel, solid black wallpaper |
 | **Display** | TigerVNC (preferred) or Termux:X11 — interactive resolution presets |
 | **Browsers** | Chromium v89 and/or Firefox (user choice) + Google Chrome — all with proot flags |
@@ -23,12 +25,33 @@ Uses `proot-distro` to install Ubuntu, then applies sandbox/GPU/keyring mods tha
 | **System Monitor** | Conky desktop widgets (CPU, RAM, Storage, Network, Top Processes) |
 | **Network** | nmap, traceroute, whois, dig, Angry IP Scanner |
 | **Windows** | Wine (+ box64 on arm64), Notepad++ |
-| **Cloud** | Google Drive sync via rclone (pull/push/bisync) |
+| **Cloud** | Google Drive & Dropbox via rclone WebDAV — browse on-demand in Thunar, nothing stored locally |
 | **Dev Tools** | Android SDK (full: cmdline-tools, sdkmanager, platform-tools, build-tools), ADB, Node.js, Arduino CLI + IDE, cmake, gdb, clang, make, tmux, jq, sqlite3, Java JDK, Ruby, Python 3 |
 | **Sound** | PulseAudio over TCP (plays through Android speakers) |
 | **USB** | OTG devices via bind-mounted `/dev/bus/usb` |
-| **Panel** | Applications | Settings | Terminal | Thunar | Chromium/Firefox | Chrome | Thunderbird | VSCode | LibreOffice | GIMP | Blender | Spotify | Tasklist | Volume | Clock (LCD) |
+| **SSH** | OpenSSH server on port 2222 (optional, configured during setup) |
+| **Hostname** | Custom hostname configured during setup (with proot-compatible env export) |
+| **Panel** | Applications &#124; Settings &#124; Terminal &#124; Thunar &#124; Chromium/Firefox &#124; Chrome &#124; Thunderbird &#124; VSCode &#124; LibreOffice &#124; GIMP &#124; Blender &#124; Spotify &#124; Tasklist &#124; Volume &#124; Clock (LCD) |
 | **Architecture** | arm64 primary, amd64/armhf fallback |
+
+---
+
+## Repository Contents
+
+| File | Where to Run | Purpose |
+|---|---|---|
+| `setup-termux.sh` | Termux | Installs proot-distro, Ubuntu, creates VNC/X11 launchers |
+| `setup-proot.sh` | Inside proot | Installs ~30 apps + XFCE desktop customization + SSH + hostname |
+| `chromium-repair.sh` | Inside proot | Reinstalls Chromium v89 + Firefox with proot wrappers |
+| `vscode-repair.sh` | Inside proot | Restores proot wrapper after VSCode auto-updates |
+| `gdrive-mount.sh` | Inside proot | Google Drive access via rclone WebDAV (browse in Thunar) |
+| `dropbox-mount.sh` | Inside proot | Dropbox access via rclone WebDAV (browse in Thunar) |
+| `proot-backup.sh` | Termux | Backup & restore the entire proot environment |
+| `instructions.md` | — | Comprehensive step-by-step guide |
+
+All scripts are **idempotent** — safe to re-run. They detect existing installs and skip what's already present.
+
+---
 
 ## Quick Start
 
@@ -65,7 +88,7 @@ bash setup-termux.sh
 Follow the on-screen instructions — the script will:
 - Install `proot-distro`, TigerVNC, PulseAudio, Termux:X11 support
 - Download and install Ubuntu (you choose the version)
-- Copy all scripts into the proot environment
+- Copy scripts into the proot environment
 - Let you configure resolution presets for your device(s)
 - Create launcher scripts in your Termux home (`~/`)
 
@@ -76,175 +99,198 @@ proot-distro login ubuntu-oldlts    # (or your chosen alias)
 bash /root/setup-proot.sh           # Installs ~30 apps + desktop customization
 ```
 
-This takes 15–30 minutes depending on internet speed. Follow the prompts (browser choice, etc.).
+Follow the prompts — you'll choose browsers, hostname, and whether to enable SSH.
 
 ### 5. Exit proot and start the desktop
 
 ```bash
 exit
+cd .. (back to Termux home)
 bash ~/start-ubuntu-vnc.sh          # Starts VNC in the background
 ```
 
-Open **RealVNC Viewer** → New Connection → `localhost:5901`
+Open **RealVNC Viewer** → New Connection → `localhost:5901` or `127.0.0.1:5901`  (You can also connect from a remote PC by replacing `localhost` with your device's IP address)
 
 The VNC server runs **in the background** — your Termux shell stays usable. Use `bash ~/stop-ubuntu.sh` when you're done.
 
-### 6. (Optional) Set up Google Drive
+### 6. (Optional) Set up cloud storage
 
 ```bash
 proot-distro login ubuntu-oldlts
-bash /root/gdrive-mount.sh          # Interactive rclone setup
+bash /root/gdrive-mount.sh          # Google Drive via WebDAV
+bash /root/dropbox-mount.sh         # Dropbox via WebDAV
 ```
 
-All scripts are **idempotent** — safe to re-run. They detect existing installs and skip what's already present.
+After setup, browse Google Drive in Thunar at `dav://localhost:8880/` and Dropbox at `dav://localhost:8881/` — or use the `gdrive` / `dbx` CLI commands.
 
-## File Structure
+---
 
-```
-proot-dev-mods/
-├── setup-termux.sh       # Step 1: Run in Termux — installs Ubuntu, creates launchers
-├── setup-proot.sh        # Step 2: Run inside proot — installs desktop + all apps + mods
-├── gdrive-mount.sh       # Step 3 (optional): Run inside proot — Google Drive rclone sync
-├── proot-backup.sh       # Backup/restore the entire Ubuntu environment
-├── chromium-repair.sh    # Fix: reinstall Chromium v89 / Firefox / both (user choice)
-├── vscode-repair.sh      # Fix: restore VSCode proot wrapper + configs after updates
-├── instructions.md       # Full documentation (architecture, troubleshooting, etc.)
-└── README.md             # This file
-```
+## Cloud Storage (Google Drive & Dropbox)
 
-### Launcher scripts (created by setup-termux.sh)
+FUSE mounting (`rclone mount`) is **not available** inside proot (no kernel module). Instead, these scripts use rclone's built-in **WebDAV server** to expose cloud storage as a browsable network location. Files are accessed on-demand — nothing is synced or stored locally.
 
-| Script | Purpose |
+### Google Drive (`gdrive-mount.sh`)
+
+| Port | Thunar Address | CLI Command |
+|---|---|---|
+| 8880 | `dav://localhost:8880/` | `gdrive` |
+
+### Dropbox (`dropbox-mount.sh`)
+
+| Port | Thunar Address | CLI Command |
+|---|---|---|
+| 8881 | `dav://localhost:8881/` | `dbx` |
+
+### CLI Quick Reference
+
+Both `gdrive` and `dbx` share the same subcommands:
+
+| Command | Description |
 |---|---|
-| `~/start-ubuntu-vnc.sh` | Start VNC desktop in the **background** — choose resolution, PulseAudio, USB passthrough |
-| `~/start-ubuntu-x11.sh` | Start desktop via Termux:X11 in the **background** |
-| `~/stop-ubuntu.sh` | Stop everything — VNC, X11, PulseAudio, proot sessions, wake-lock |
-| `~/login-ubuntu.sh` | Shell-only proot login (no desktop) |
+| `gdrive ls [path]` | List files/folders |
+| `gdrive tree [path]` | Tree view |
+| `gdrive get <remote> [local]` | Download file or folder |
+| `gdrive put <local> <remote>` | Upload file or folder |
+| `gdrive mkdir <path>` | Create folder |
+| `gdrive rm <path>` | Delete file/folder |
+| `gdrive mv <from> <to>` | Move/rename |
+| `gdrive cp <from> <to>` | Copy |
+| `gdrive cat <file>` | Print file to stdout |
+| `gdrive search <name>` | Search by name |
+| `gdrive open [path]` | Open in Thunar via WebDAV |
+| `gdrive start` | Start WebDAV server |
+| `gdrive stop` | Stop WebDAV server |
+| `gdrive status` | Show status & quota |
+| `gdrive help` | Show all commands |
 
-### Repair scripts (inside proot at /root/)
+Replace `gdrive` with `dbx` for Dropbox — identical usage.
 
-| Script | Purpose |
-|---|---|
-| `/root/chromium-repair.sh` | Reinstall Chromium v89 from Debian Buster with proot flags. Run after browser issues or snap contamination. |
-| `/root/vscode-repair.sh` | Restore VSCode proot wrapper, `argv.json`, `settings.json`, and `.desktop` patches. Run after any VSCode update. |
+### OAuth Authentication
 
-### setup-proot.sh
-Runs inside Ubuntu proot. Installs and configures:
-- XFCE4 desktop + TigerVNC with bottom dock panel
-- Browser choice: Chromium v89 (Debian Buster .deb + 14 compat libraries + proot flags via `/etc/chromium.d/`) and/or Firefox (Mozilla APT + proot wrapper)
-- Google Chrome with proot wrapper
-- VSCode with proot wrapper (`--no-sandbox`, `--password-store=basic`)
-- Blender, GIMP, LibreOffice, GParted, Kdenlive, Shotcut, OBS Studio, Thunderbird, Spotify
-- App Store (GNOME Software), WireGuard VPN, Conky desktop system monitor
-- Full Android SDK (cmdline-tools, sdkmanager, platform-tools, build-tools, platforms)
-- Arduino IDE + Arduino CLI
-- Dev tools: ADB, Node.js, cmake, gdb, clang, make, tmux, jq, sqlite3, Java, Ruby
-- Network tools: nmap, traceroute, whois, dnsutils, Angry IP Scanner
-- Wine (+ box64 on arm64) with Notepad++
-- Environment variables (`ELECTRON_DISABLE_SANDBOX`, `LIBGL_ALWAYS_SOFTWARE`, etc.)
-- Desktop customization (dark theme, Humanity icons, all app launchers in panel, LCD clock, DPMS off, Conky widgets)
+During setup, two methods are available:
 
-## Daily Usage
+- **Option A — Browser**: rclone opens the installed browser for sign-in (requires VNC desktop running)
+- **Option B — Manual token**: rclone prints a URL; open it on any device, sign in, paste the token back
 
-### Starting
+---
 
-```bash
-bash ~/start-ubuntu-vnc.sh       # Start VNC (background) → connect to localhost:5901
-# or
-bash ~/start-ubuntu-x11.sh       # Start X11 (background) → switch to Termux:X11 app
-```
+## Repair Scripts
 
-Both launchers run in the **background** and return you to the Termux shell immediately. You can continue using the terminal while the desktop runs.
+### `chromium-repair.sh` — Browser Repair
 
-### Stopping
+Reinstalls Chromium v89 from Debian Buster and/or Firefox from Mozilla APT with all proot compatibility flags. Run if Chromium/Firefox break or won't launch.
 
 ```bash
-bash ~/stop-ubuntu.sh            # Stops VNC/X11/PulseAudio, kills proot sessions, releases wake-lock
+bash /root/chromium-repair.sh    # Inside proot
 ```
 
-### Shell-only access (no desktop)
+### `vscode-repair.sh` — VSCode Repair
+
+VSCode auto-updates regularly overwrite the proot wrapper (`/usr/bin/code`), `.desktop` files, and flags. This script restores everything in seconds.
 
 ```bash
-bash ~/login-ubuntu.sh
-# or:
-proot-distro login ubuntu-oldlts
+bash /root/vscode-repair.sh      # Inside proot
 ```
 
-### After a VSCode update
-
-VSCode updates regularly and overwrites the proot wrapper and `.desktop` files. Run the repair script inside proot:
-
-```bash
-bash /root/vscode-repair.sh
-```
-
-### After browser issues
-
-If Chromium won't launch or snap stubs contaminate the install:
-
-```bash
-bash /root/chromium-repair.sh
-```
-
-## Sound
-
-PulseAudio runs in Termux and streams audio to Android speakers over TCP. Works with both VNC and X11.
-
-- Volume control widget is in the XFCE panel
-- Run `pavucontrol` for advanced mixing
-- Test: `paplay /usr/share/sounds/freedesktop/stereo/bell.oga`
-
-> VNC does NOT carry audio — sound plays directly through the device. Since you're on the same physical device, this works perfectly.
-
-## USB
-
-USB OTG devices are bind-mounted into proot automatically by the launcher scripts.
-
-```bash
-# Inside proot
-lsusb              # List connected USB devices
-
-# In Termux
-termux-usb -l      # List USB devices Android sees
-```
-
-When you plug in a USB device, Android will prompt you to grant access to Termux — tap Allow.
-
-## Google Drive
-
-```bash
-# Inside proot (after running gdrive-mount.sh):
-gdrive-pull              # Download Google Drive → ~/GoogleDrive
-gdrive-push              # Upload ~/GoogleDrive → Drive (destructive sync)
-gdrive-copy ~/file dst   # Safe one-way copy (no deletes)
-gdrive-bisync            # Two-way bidirectional sync
-gdrive-status            # Show connection info + usage
-```
+---
 
 ## Backup & Restore
 
+Run **in Termux** (not inside proot):
+
 ```bash
-# In Termux:
-bash ~/proot-backup.sh backup          # Full backup → ~/storage/shared/proot-backups/
-bash ~/proot-backup.sh backup --quick  # Skip caches/tmp
-bash ~/proot-backup.sh restore <file>  # Restore from archive
-bash ~/proot-backup.sh list            # List available backups
-bash ~/proot-backup.sh info <file>     # Show backup metadata
+bash ~/proot-backup.sh backup           # Full backup → Internal Storage/proot-backups/
+bash ~/proot-backup.sh backup --quick   # Skip caches/tmp (smaller, faster)
+bash ~/proot-backup.sh restore <file>   # Restore from archive
+bash ~/proot-backup.sh list             # List available backups
+bash ~/proot-backup.sh info <file>      # Show backup metadata
 ```
+
+Backups are saved to `Internal Storage/proot-backups/` — accessible from Android's file manager, USB, ADB, or rclone.
+
+---
 
 ## Display Options
 
-### VNC (Recommended)
-1. Install **RealVNC Viewer** from Play Store
-2. `bash ~/start-ubuntu-vnc.sh`
-3. Choose resolution from presets
-4. Connect to `localhost:5901`
-5. Set VNC password on first run when prompted
+| Feature | VNC (Recommended) | Termux:X11 |
+|---|---|---|
+| **Start command** | `bash ~/start-ubuntu-vnc.sh` | `bash ~/start-ubuntu-x11.sh` |
+| **Viewer** | RealVNC Viewer → `localhost:5901` | Termux:X11 app |
+| **Setup effort** | Lower — just install RealVNC | Needs sideloaded APK |
+| **Performance** | Good | Better (native Wayland) |
+| **Audio** | PulseAudio TCP → Android speakers | Same |
+| **Stop** | `bash ~/stop-ubuntu.sh` | `bash ~/stop-ubuntu.sh` |
 
-### Termux:X11
-1. Install **Termux:X11** companion app
-2. `bash ~/start-ubuntu-x11.sh`
-3. Switch to the Termux:X11 app
+---
+
+## Sound & USB
+
+### Sound
+
+PulseAudio runs in Termux and streams audio to Android speakers over TCP. VNC does **not** carry audio — sound plays directly through the device (which works perfectly since you're on the same physical device).
+
+```bash
+paplay /usr/share/sounds/freedesktop/stereo/bell.oga   # Test sound
+pavucontrol                                              # Volume mixer
+```
+
+### USB
+
+USB OTG devices are bind-mounted into proot by the launcher scripts. When you plug in a USB device, Android prompts you to grant access to Termux.
+
+```bash
+lsusb                # List USB devices (inside proot)
+termux-usb -l        # List USB devices (in Termux)
+```
+
+> **Note**: Raw USB access works (libusb, serial). Kernel-level auto-mounting requires Android root.
+
+---
+
+## Quick Reference
+
+```bash
+# ── Start / Stop ──────────────────────────────────────
+bash ~/start-ubuntu-vnc.sh       # Start VNC desktop (background)
+bash ~/start-ubuntu-x11.sh      # Start X11 desktop (background)
+bash ~/stop-ubuntu.sh            # Stop everything
+bash ~/login-ubuntu.sh           # Shell only (no desktop)
+
+# ── Inside Proot ──────────────────────────────────────
+bash /root/setup-proot.sh        # (Re)run proot setup
+bash /root/chromium-repair.sh    # Fix browsers
+bash /root/vscode-repair.sh      # Fix VSCode after updates
+
+# ── Cloud Storage ─────────────────────────────────────
+bash /root/gdrive-mount.sh       # Set up Google Drive
+bash /root/dropbox-mount.sh      # Set up Dropbox
+gdrive ls                        # Browse Google Drive
+dbx ls                           # Browse Dropbox
+gdrive open                      # Open Drive in Thunar
+dbx open                         # Open Dropbox in Thunar
+
+# ── Backup / Restore (Termux) ────────────────────────
+bash ~/proot-backup.sh backup           # Full backup
+bash ~/proot-backup.sh backup --quick   # Quick backup
+bash ~/proot-backup.sh restore <file>   # Restore
+bash ~/proot-backup.sh list             # List backups
+```
+
+---
+
+## Detailed Guide
+
+See **[instructions.md](instructions.md)** for the comprehensive setup guide covering:
+
+- Prerequisites and Android configuration
+- Phantom Process Killer fix (Android 12+)
+- Detailed script-by-script documentation
+- XFCE desktop customization details
+- Development tools usage
+- Full troubleshooting guide
+- What works / what doesn't in proot
+
+---
 
 ## Known Limitations
 
@@ -253,24 +299,13 @@ bash ~/proot-backup.sh info <file>     # Show backup metadata
 | No `systemd` | proot is not a real VM — use `service` commands instead |
 | No `snap` packages | Snap requires systemd + kernel features |
 | No `docker` | Needs kernel namespaces — use remote Docker |
-| No FUSE mounts | No kernel FUSE module — use rclone sync instead |
-| No GDM/LightDM login screen | Display managers need PAM/logind/systemd |
-| Harmless sandbox warnings | "Failed to move to new namespace" — expected, can ignore |
+| No FUSE mounts | No kernel FUSE module — use rclone WebDAV server instead |
+| No GDM/LightDM | Display managers need PAM/logind/systemd |
 | No GPU acceleration | Software rendering only (`LIBGL_ALWAYS_SOFTWARE=1`) |
-| USB auto-mount | Raw libusb access works; kernel-level mount needs manual steps |
-| VSCode keyring dialog | Cancel it — `password-store=basic` is already active |
+| USB auto-mount | Raw libusb access works; kernel-level mount needs root |
+| Harmless sandbox warnings | "Failed to move to new namespace" — expected, ignore |
 
-## Troubleshooting
-
-See [instructions.md](instructions.md) Section 12 for detailed troubleshooting, including:
-- VNC black screen fixes
-- VSCode crash resolution
-- Chromium/browser launch failures
-- apt/dpkg lock issues
-- Storage permission problems
-- Wine/Notepad++ issues
-- Google Drive auth problems
-- Error 9 / Signal 9 (Phantom Process Killer — see Section 3 of instructions.md)
+---
 
 ## License
 
