@@ -11,14 +11,15 @@
 3. [Android 12+ Phantom Process Killer Fix](#3-android-12-phantom-process-killer-fix)
 4. [Termux-Side Setup (setup-termux.sh)](#4-termux-side-setup)
 5. [Proot-Side Setup (setup-proot.sh)](#5-proot-side-setup)
-6. [Google Drive Sync (gdrive-mount.sh)](#6-google-drive-sync)
-7. [Display Access Options](#7-display-access-options)
-8. [XFCE Desktop Customization](#8-xfce-desktop-customization)
-9. [Daily Usage](#9-daily-usage)
-10. [Sound & USB](#10-sound--usb)
-11. [Backup & Restore](#11-backup--restore)
-12. [Troubleshooting](#12-troubleshooting)
-13. [What Works / What Doesn't in Proot](#13-what-works--what-doesnt-in-proot)
+6. [Google Drive (gdrive-mount.sh)](#6-google-drive)
+7. [Dropbox (dropbox-mount.sh)](#7-dropbox)
+8. [Display Access Options](#8-display-access-options)
+9. [XFCE Desktop Customization](#9-xfce-desktop-customization)
+10. [Daily Usage](#10-daily-usage)
+11. [Sound & USB](#11-sound--usb)
+12. [Backup & Restore](#12-backup--restore)
+13. [Troubleshooting](#13-troubleshooting)
+14. [What Works / What Doesn't in Proot](#14-what-works--what-doesnt-in-proot)
 
 ---
 
@@ -181,7 +182,7 @@ The script is fully idempotent (safe to re-run). It performs these steps:
 | **2. Install packages** | `proot-distro`, `pulseaudio`, `tigervnc`, `termux-x11-nightly`, `termux-api` — skips if already present |
 | **2b. Storage** | Runs `termux-setup-storage` to grant Android storage permission |
 | **3. Install Ubuntu** | Offers Ubuntu version choice (22.04 LTS or latest). If Ubuntu is already installed, prompts to **re-use** or **wipe and reinstall** |
-| **4. Copy scripts** | Copies `setup-proot.sh`, `gdrive-mount.sh`, `proot-backup.sh`, `chromium-repair.sh`, and `vscode-repair.sh` into the proot rootfs |
+| **4. Copy scripts** | Copies `setup-proot.sh`, `gdrive-mount.sh`, `dropbox-mount.sh`, `chromium-repair.sh`, `vscode-repair.sh` into the proot rootfs; `proot-backup.sh` stays in Termux home |
 | **5. Resolution presets** | Interactive resolution chooser — add as many device presets as you like (phone, tablet, fold, desktop) |
 | **6. VNC launcher** | Creates `~/start-ubuntu-vnc.sh` — starts VNC **in the background**, returns shell to user |
 | **7. X11 launcher** | Creates `~/start-ubuntu-x11.sh` — starts Termux:X11 **in the background**, returns shell to user |
@@ -241,6 +242,12 @@ The script is fully idempotent (safe to re-run). Uses `_is_installed()` / `_all_
 - Fixes apt sources.list (replaces ftp mirrors, removes duplicates)
 - Conditional `apt update && apt upgrade` (skips if recently done)
 - Creates `/dev/shm` (needed for Electron/browser shared memory)
+
+#### Hostname Configuration
+- Prompts the user to set a custom hostname (or keep the current one)
+- Sanitizes input (replaces spaces with hyphens, strips invalid characters)
+- Writes to `/etc/hostname` and updates `/etc/hosts`
+- Exports `HOSTNAME` in `/etc/bash.bashrc` — necessary because proot's `hostname` syscall returns the Android host kernel value, so the env var ensures shell prompts display the correct name
 
 #### Section 1: XFCE Desktop + VNC
 - Installs: `xfce4`, `xfce4-terminal`, selected xfce4 plugins, `dbus-x11`, `tigervnc-standalone-server`, fonts, locale
@@ -418,26 +425,26 @@ The script takes 15-30 minutes depending on internet speed and device.
 
 ---
 
-## 6. Google Drive Sync
+## 6. Google Drive
 
 > **Script:** `gdrive-mount.sh` — Run inside the Ubuntu proot environment.
 
-### Why Sync Instead of Mount?
+### How It Works
 
-FUSE mounting (`rclone mount`) requires a kernel FUSE module, which is **not available** inside proot. Instead, this script uses rclone's **sync/copy/bisync** commands to transfer files between Google Drive and a local `~/GoogleDrive` directory.
+FUSE mounting (`rclone mount`) requires a kernel FUSE module, which is **not available** inside proot. Instead, this script uses rclone's built-in **WebDAV server** to expose Google Drive as a browsable network location on `localhost:8880`. Thunar connects via `gvfs-webdav` — files are accessed on-demand, **nothing is synced or stored locally**.
 
 ### What It Does
 
 | Section | Description |
 |---|---|
 | **1. Install rclone** | Via apt or official installer script |
-| **2. Create directory** | `~/GoogleDrive` local sync folder |
-| **3. Configure remote** | Interactive OAuth setup — works with VNC browser or manual token paste |
+| **2. Install gvfs-backends** | Enables WebDAV browsing in Thunar |
+| **3. Configure remote** | Interactive Google Drive OAuth setup — browser or manual token |
 | **4. Test connection** | Lists top-level Drive folders to confirm access |
-| **5. Sync scripts** | Creates 5 wrapper commands in `~/.local/bin/` |
-| **6. Thunar bookmark** | Adds GoogleDrive to file manager sidebar |
-| **7. Desktop shortcut** | Interactive menu: open folder, pull, push, bisync, status, config |
-| **8. Auto-sync** | Optional: auto-pull from Drive on each proot login |
+| **5. CLI & server scripts** | Creates the `gdrive` CLI command + `gdrive-start` / `gdrive-stop` helpers in `~/.local/bin/` |
+| **6. Desktop shortcut** | "Google Drive" shortcut on desktop → `gdrive open` (starts server + opens Thunar) |
+| **7. Auto-start** | Optional: auto-start WebDAV server on each proot login |
+| **8. Cleanup** | Removes old sync-based artifacts (if upgrading from previous version) |
 
 ### OAuth Authentication
 
@@ -449,20 +456,36 @@ rclone opens the installed browser inside the proot for Google sign-in.
 **Option B — Manual token (headless):**
 rclone prints a URL. Open it on any device (phone, laptop), sign in, paste the token back.
 
-### Sync Commands
+### CLI Commands (`gdrive`)
 
-After setup, these commands are available from anywhere in the proot:
+After setup, the `gdrive` command is available from anywhere in the proot:
 
 | Command | Description |
 |---|---|
-| `gdrive-pull` | Download Google Drive → `~/GoogleDrive` |
-| `gdrive-pull Documents` | Sync only a specific subfolder |
-| `gdrive-push` | Upload `~/GoogleDrive` → Google Drive (**destructive** — deletes remote files not present locally) |
-| `gdrive-push Projects` | Push only a specific subfolder |
-| `gdrive-copy ~/file Drive/path` | One-way copy (safe, no deletes) |
-| `gdrive-bisync` | Two-way bidirectional sync |
-| `gdrive-bisync --resync` | First-time bisync (resolves conflicts) |
-| `gdrive-status` | Show Drive connection info, usage, top folders |
+| `gdrive ls [path]` | List files/folders |
+| `gdrive tree [path]` | Tree view |
+| `gdrive get <remote> [local]` | Download file or folder |
+| `gdrive put <local> <remote>` | Upload file or folder |
+| `gdrive mkdir <path>` | Create folder on Drive |
+| `gdrive rm <path>` | Delete file/folder |
+| `gdrive mv <from> <to>` | Move/rename on Drive |
+| `gdrive cp <from> <to>` | Copy on Drive |
+| `gdrive cat <file>` | Print file to stdout |
+| `gdrive search <name>` | Search by name |
+| `gdrive open [path]` | Open in Thunar via WebDAV |
+| `gdrive start` | Start WebDAV server (port 8880) |
+| `gdrive stop` | Stop WebDAV server |
+| `gdrive status` | Show status & quota |
+| `gdrive info` | Show Drive usage/quota |
+| `gdrive help` | Show all commands |
+
+### Browsing in Thunar
+
+Open Thunar and navigate to:
+```
+dav://localhost:8880/
+```
+Or just run `gdrive open` — it starts the server if needed and opens Thunar automatically.
 
 ### Running
 
@@ -489,7 +512,74 @@ rclone about gdrive:            # Show storage usage
 
 ---
 
-## 7. Display Access Options
+## 7. Dropbox
+
+> **Script:** `dropbox-mount.sh` — Run inside the Ubuntu proot environment.
+
+### How It Works
+
+Same architecture as Google Drive — rclone serves Dropbox as a local WebDAV server on `localhost:8881`. Thunar connects via `gvfs-webdav` for on-demand browsing.
+
+### What It Does
+
+| Section | Description |
+|---|---|
+| **1. Install rclone** | Via apt or official installer script (shared with Google Drive) |
+| **2. Install gvfs-backends** | Enables WebDAV browsing in Thunar |
+| **3. Configure remote** | Interactive Dropbox OAuth setup — browser or manual token |
+| **4. Test connection** | Lists top-level Dropbox folders to confirm access |
+| **5. CLI & server scripts** | Creates the `dbx` CLI command + `dropbox-start` / `dropbox-stop` helpers in `~/.local/bin/` |
+| **6. Desktop shortcut** | "Dropbox" shortcut on desktop → `dbx open` (starts server + opens Thunar) |
+| **7. Auto-start** | Optional: auto-start WebDAV server on each proot login |
+
+### CLI Commands (`dbx`)
+
+After setup, the `dbx` command is available from anywhere in the proot:
+
+| Command | Description |
+|---|---|
+| `dbx ls [path]` | List files/folders |
+| `dbx tree [path]` | Tree view |
+| `dbx get <remote> [local]` | Download file or folder |
+| `dbx put <local> <remote>` | Upload file or folder |
+| `dbx mkdir <path>` | Create folder on Dropbox |
+| `dbx rm <path>` | Delete file/folder |
+| `dbx mv <from> <to>` | Move/rename on Dropbox |
+| `dbx cp <from> <to>` | Copy on Dropbox |
+| `dbx cat <file>` | Print file to stdout |
+| `dbx search <name>` | Search by name |
+| `dbx open [path]` | Open in Thunar via WebDAV |
+| `dbx start` | Start WebDAV server (port 8881) |
+| `dbx stop` | Stop WebDAV server |
+| `dbx status` | Show status & quota |
+| `dbx info` | Show Dropbox usage/quota |
+| `dbx help` | Show all commands |
+
+### Browsing in Thunar
+
+Open Thunar and navigate to:
+```
+dav://localhost:8881/
+```
+Or just run `dbx open` — it starts the server if needed and opens Thunar automatically.
+
+### Running
+
+```bash
+# Enter the proot:
+proot-distro login ubuntu-oldlts
+
+# Run the setup:
+bash /root/dropbox-mount.sh
+```
+
+### Using Both Services
+
+Google Drive and Dropbox can run side-by-side — they use different ports (8880 and 8881). Both can auto-start on login if enabled.
+
+---
+
+## 8. Display Access Options
 
 ### Option A: TigerVNC + RealVNC Viewer (Recommended)
 
@@ -539,7 +629,7 @@ Then switch to the **Termux:X11** app on Android.
 
 ---
 
-## 8. XFCE Desktop Customization
+## 9. XFCE Desktop Customization
 
 The setup script auto-configures the desktop:
 
@@ -588,7 +678,7 @@ xfconf-query -c xfce4-desktop -p /backdrop/screen0/monitorscreen/workspace0/last
 
 ---
 
-## 9. Daily Usage
+## 10. Daily Usage
 
 ### Starting Your Session
 ```bash
@@ -618,13 +708,22 @@ bash ~/start-ubuntu-vnc.sh
 - **Conky**: Auto-starts on desktop — shows CPU, RAM, Storage, Network, Top Processes
 - **Settings**: Panel icon or `xfce4-settings-manager` in terminal
 
-### Google Drive Sync
+### Cloud Storage
 ```bash
-gdrive-pull              # Download from Drive
-gdrive-push              # Upload to Drive (destructive)
-gdrive-copy ~/file dst   # Safe copy to Drive
-gdrive-bisync            # Two-way sync
-gdrive-status            # Connection info
+# Google Drive
+gdrive ls                # List files on Drive
+gdrive open              # Open in Thunar (WebDAV)
+gdrive get file.txt      # Download a file
+gdrive put doc.pdf /     # Upload a file
+gdrive search "report"   # Search by name
+gdrive status            # Show status & quota
+
+# Dropbox
+dbx ls                   # List files on Dropbox
+dbx open                 # Open in Thunar (WebDAV)
+dbx get photos/pic.jpg   # Download a file
+dbx put doc.pdf /        # Upload a file
+dbx status               # Show status & quota
 ```
 
 ### Development Tools
@@ -688,7 +787,7 @@ bash ~/stop-ubuntu.sh
 
 ---
 
-## 10. Sound & USB
+## 11. Sound & USB
 
 ### Sound (PulseAudio)
 
@@ -740,7 +839,7 @@ When you plug in a USB device, Android will prompt you to grant access to Termux
 
 ---
 
-## 11. Backup & Restore
+## 12. Backup & Restore
 
 > **Script:** `proot-backup.sh` — Run in Termux (NOT inside proot).
 
@@ -797,7 +896,7 @@ PROOT_BACKUP_DIR=~/my-backups bash ~/proot-backup.sh backup
 
 ---
 
-## 12. Troubleshooting
+## 13. Troubleshooting
 
 ### Common Issues
 
@@ -820,7 +919,9 @@ PROOT_BACKUP_DIR=~/my-backups bash ~/proot-backup.sh backup
 | **Wine/Notepad++ not working** | On arm64, needs box64: check `dpkg -l box64`. Reinstall if missing from ryanfortner repo |
 | **Angry IP Scanner missing** | Re-run `setup-proot.sh` — it auto-downloads the latest from GitHub |
 | **Google Drive auth failed** | Run `rclone config` inside proot to reconfigure. Use manual token if browser doesn't work |
-| **gdrive-pull/push not found** | Ensure `~/.local/bin` is in PATH: `export PATH="$HOME/.local/bin:$PATH"` |
+| **gdrive/dbx command not found** | Ensure `~/.local/bin` is in PATH: `export PATH="$HOME/.local/bin:$PATH"` |
+| **WebDAV won't connect in Thunar** | Start the server first: `gdrive start` or `dbx start`. Check status with `gdrive status`. Ensure `gvfs-backends` is installed: `apt install gvfs-backends` |
+| **Dropbox auth failed** | Run `rclone config` inside proot to reconfigure the `dropbox` remote |
 | **Conky not showing** | Kill and restart: `killall conky; sleep 2; conky -d -c ~/.config/conky/conky.conf` |
 | **Android SDK not found** | Source the profile: `source /etc/profile.d/android-sdk.sh` or check `/opt/android-sdk/cmdline-tools/` |
 | **WireGuard no interface** | Create config at `/etc/wireguard/wg0.conf` first, then `wg-quick up wg0` |
@@ -849,7 +950,7 @@ chromium-default 2>&1 | head -50
 
 ---
 
-## 13. What Works / What Doesn't in Proot
+## 14. What Works / What Doesn't in Proot
 
 ### Works
 
@@ -863,7 +964,7 @@ chromium-default 2>&1 | head -50
 - **Music**: Spotify (official client on amd64, spotifyd + spotify-tui on arm64)
 - **Network**: nmap, traceroute, whois, dig, Angry IP Scanner
 - **Windows apps**: Wine + Notepad++ (box64 on arm64)
-- **Cloud**: Google Drive via rclone sync/copy/bisync
+- **Cloud**: Google Drive & Dropbox via rclone WebDAV (browse on-demand in Thunar, nothing stored locally)
 - **Sound**: PulseAudio over TCP (plays through Android speakers)
 - **USB**: OTG devices via bind-mounted `/dev/bus/usb`
 - **Languages**: Python 3, Node.js, Java (JDK), Ruby
@@ -882,14 +983,14 @@ chromium-default 2>&1 | head -50
 | Snap | Needs systemd | Use apt or .deb packages |
 | Android Emulator | Needs KVM | Use physical device via ADB |
 | Hardware GPU | No `/dev/dri` in proot | Software rendering (`LIBGL_ALWAYS_SOFTWARE=1`) |
-| FUSE mounts | No kernel FUSE module | Use rclone sync/copy instead of rclone mount |
+| FUSE mounts | No kernel FUSE module | Use rclone WebDAV server (`gdrive start` / `dbx start`) instead of `rclone mount` |
 | USB auto-mount | Needs kernel driver | Manual mount or raw libusb access |
 | GDM/LightDM | Display managers need systemd | VNC xstartup with `startxfce4` |
 | systemd services | No systemd in proot | Use `service` commands instead |
 
 > **Note on GDM**: GDM (GNOME Display Manager) cannot run in proot because it requires systemd, PAM, and logind — none of which work in proot. XFCE launched directly via `startxfce4` in the VNC xstartup is the correct approach.
 
-> **Note on FUSE**: `rclone mount` requires FUSE, which needs a kernel module not available in proot. Use `gdrive-pull` / `gdrive-push` / `gdrive-bisync` for Google Drive sync instead.
+> **Note on FUSE**: `rclone mount` requires FUSE, which needs a kernel module not available in proot. Use `rclone serve webdav` (managed by `gdrive start` / `dbx start`) to browse cloud storage via WebDAV instead.
 
 ---
 
@@ -904,16 +1005,28 @@ bash ~/login-ubuntu.sh           # Shell only (no desktop)
 
 # ── Inside Proot ──────────────────────────────────────
 bash /root/setup-proot.sh        # (Re)run proot setup
-bash /root/gdrive-mount.sh       # Set up Google Drive sync
-bash /root/chromium-repair.sh    # Fix Chromium after issues
+bash /root/chromium-repair.sh    # Fix browsers after issues
 bash /root/vscode-repair.sh      # Fix VSCode after updates
 
+# ── Cloud Storage Setup ──────────────────────────────
+bash /root/gdrive-mount.sh       # Set up Google Drive (WebDAV)
+bash /root/dropbox-mount.sh      # Set up Dropbox (WebDAV)
+
 # ── Google Drive ──────────────────────────────────────
-gdrive-pull                      # Download Drive → ~/GoogleDrive
-gdrive-push                      # Upload ~/GoogleDrive → Drive
-gdrive-copy ~/file Drive/path    # Safe copy (no deletes)
-gdrive-bisync                    # Two-way sync
-gdrive-status                    # Connection info
+gdrive ls                        # List files on Drive
+gdrive open                      # Open in Thunar (WebDAV)
+gdrive get <remote> [local]      # Download file/folder
+gdrive put <local> <remote>      # Upload file/folder
+gdrive search <name>             # Search by name
+gdrive start / stop / status     # Manage WebDAV server
+
+# ── Dropbox ───────────────────────────────────────────
+dbx ls                           # List files on Dropbox
+dbx open                         # Open in Thunar (WebDAV)
+dbx get <remote> [local]         # Download file/folder
+dbx put <local> <remote>         # Upload file/folder
+dbx search <name>                # Search by name
+dbx start / stop / status        # Manage WebDAV server
 
 # ── Backup / Restore (Termux) ────────────────────────
 bash ~/proot-backup.sh backup           # Full backup

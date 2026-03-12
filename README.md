@@ -240,6 +240,25 @@ Backups are saved to `Internal Storage/proot-backups/` — accessible from Andro
 | **Audio** | PulseAudio TCP → Android speakers | Same |
 | **Stop** | `bash ~/stop-ubuntu.sh` | `bash ~/stop-ubuntu.sh` |
 
+### Adding Resolution Presets
+
+Resolution presets are stored in `~/.proot-resolutions.conf` **in Termux** (not inside the proot). The initial setup prompts you to configure them, but you can add or change presets at any time:
+
+```bash
+nano ~/.proot-resolutions.conf
+```
+
+The format is one preset per line — `LABEL|WIDTHxHEIGHT`:
+
+```
+Full HD|1920x1080
+Tablet|1280x800
+Portrait|1080x1920
+Small|1280x720
+```
+
+Save with `Ctrl+O`, exit with `Ctrl+X`, then restart the VNC session to use the new resolution.
+
 ---
 
 ## Sound & USB

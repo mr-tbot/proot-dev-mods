@@ -1208,81 +1208,97 @@ CONKY_CONF="$CONKY_DIR/conky.conf"
 mkdir -p "$CONKY_DIR"
 
 cat > "$CONKY_CONF" <<'CONKY_CFG'
+--[[
+Conky Desktop Widgets — Proot Edition
+CPU, RAM, Storage, Network, Top Processes
+Orange & Black theme (matches VS Code)
+]]
+
 conky.config = {
+    -- Window
+    own_window = true,
+    own_window_class = 'Conky',
+    own_window_type = 'override',
+    own_window_transparent = false,
+    own_window_argb_visual = true,
+    own_window_argb_value = 220,
+    own_window_colour = '0a0a0a',
+    own_window_hints = 'undecorated,below,sticky,skip_taskbar,skip_pager',
+
+    -- Position & Size
     alignment = 'top_right',
-    background = true,
-    border_width = 0,
-    cpu_avg_samples = 2,
-    default_color = 'white',
-    default_outline_color = 'white',
-    default_shade_color = 'black',
-    double_buffer = true,
-    draw_borders = false,
-    draw_graph_borders = true,
-    draw_outline = false,
-    draw_shades = true,
-    extra_newline = false,
-    font = 'DejaVu Sans Mono:size=10',
     gap_x = 20,
-    gap_y = 50,
-    minimum_height = 300,
-    minimum_width = 250,
+    gap_y = 40,
+    minimum_width = 280,
+    maximum_width = 280,
+    minimum_height = 100,
+
+    -- Borders
+    border_width = 0,
+    draw_borders = false,
+    draw_outline = false,
+    draw_shades = false,
+    draw_graph_borders = false,
+
+    -- Fonts & Colors
+    use_xft = true,
+    font = 'Ubuntu Mono:size=10',
+    xftalpha = 1,
+    override_utf8_locale = true,
+    default_color = 'cccccc',
+    color1 = 'e87d0d',        -- orange (headings)
+    color2 = 'ff9a2e',        -- bright orange (bars/graphs)
+    color3 = 'cc6600',        -- deep orange (secondary bars)
+    color4 = 'ff6600',        -- hot orange (highlights)
+    color5 = '666666',        -- dim gray (labels)
+
+    -- Misc
+    background = true,
+    cpu_avg_samples = 4,
     net_avg_samples = 2,
     no_buffers = true,
     out_to_console = false,
-    out_to_ncurses = false,
     out_to_stderr = false,
-    out_to_x = true,
-    own_window = true,
-    own_window_class = 'Conky',
-    own_window_type = 'desktop',
-    own_window_transparent = true,
-    own_window_argb_visual = true,
-    own_window_argb_value = 0,
-    own_window_hints = 'undecorated,below,sticky,skip_taskbar,skip_pager',
-    show_graph_range = false,
-    show_graph_scale = false,
-    stippled_borders = 0,
+    extra_newline = false,
+    double_buffer = true,
     update_interval = 2.0,
     uppercase = false,
     use_spacer = 'none',
-    use_xft = true,
+    show_graph_scale = false,
+    show_graph_range = false,
 };
 
 conky.text = [[
-${color #88aaff}SYSTEM ${hr 2}${color}
-Host:  ${nodename}
-OS:    ${sysname} ${machine}
-Uptime:${uptime_short}
+${color1}${font Ubuntu:bold:size=14}SYSTEM ${hr 2}${font}${color}
+${color5}${voffset 4}Hostname:${color}  ${exec cat /etc/hostname}
+${color5}Kernel:${color}    ${kernel}
+${color5}Uptime:${color}    ${uptime}
 
-${color #88aaff}CPU ${hr 2}${color}
-Usage: ${cpu}% ${cpubar 8}
-${cpugraph 30,250 444444 88aaff}
-Core 1: ${cpu cpu1}%  Core 2: ${cpu cpu2}%
-Core 3: ${cpu cpu3}%  Core 4: ${cpu cpu4}%
+${color1}${font Ubuntu:bold:size=14}LOAD ${hr 2}${font}${color}
+${color5}${voffset 4}Average:${color}   ${loadavg 1}  ${loadavg 2}  ${loadavg 3}
+${color5}Tasks:${color}     ${running_processes} running / ${processes} total
 
-${color #88aaff}MEMORY ${hr 2}${color}
-RAM:  ${mem}/${memmax} ${membar 8}
-Swap: ${swap}/${swapmax} ${swapbar 8}
-${memgraph 30,250 444444 88aaff}
+${color1}${font Ubuntu:bold:size=14}MEMORY ${hr 2}${font}${color}
+${color5}${voffset 4}RAM:${color}  ${mem} / ${memmax}  ${color3}${membar 8,120}${color}
+${color5}Swap:${color} ${swap} / ${swapmax}  ${color3}${swapbar 8,120}${color}
 
-${color #88aaff}STORAGE ${hr 2}${color}
-Root: ${fs_used /}/${fs_size /} ${fs_bar 8 /}
-Home: ${fs_used /root}/${fs_size /root} ${fs_bar 8 /root}
+${color1}${font Ubuntu:bold:size=14}STORAGE ${hr 2}${font}${color}
+${color5}${voffset 4}Root /:${color}
+  ${fs_used /} / ${fs_size /}  ${color3}${fs_bar 8,130 /}${color}
 
-${color #88aaff}NETWORK ${hr 2}${color}
-${if_existing /sys/class/net/eth0}eth0: ${addr eth0}
-  Up: ${upspeed eth0}  Down: ${downspeed eth0}${endif}
-${if_existing /sys/class/net/wlan0}wlan0: ${addr wlan0}
-  Up: ${upspeed wlan0}  Down: ${downspeed wlan0}${endif}
+${color1}${font Ubuntu:bold:size=14}NETWORK ${hr 2}${font}${color}
+${color5}${voffset 4}Interface:${color} ${exec ifconfig 2>/dev/null | awk '/^[a-z]/ && !/^lo/{gsub(/:/, "", $1); print $1; exit}'}
+${color5}IP:${color}        ${exec ifconfig 2>/dev/null | awk '/inet / && !/127\./{print $2; exit}'}
+${color5}Gateway:${color}   ${exec ifconfig 2>/dev/null | awk '/inet / && !/127\./{split($2,a,"."); printf "%s.%s.%s.1",a[1],a[2],a[3]; exit}'}
+${color5}DNS:${color}       ${exec awk '/^nameserver/{print $2; exit}' /etc/resolv.conf}
 
-${color #88aaff}TOP PROCESSES ${hr 2}${color}
-${color #ffaa88}Name               CPU%  MEM%${color}
-${top name 1} ${top cpu 1} ${top mem 1}
-${top name 2} ${top cpu 2} ${top mem 2}
-${top name 3} ${top cpu 3} ${top mem 3}
-${top name 4} ${top cpu 4} ${top mem 4}
-${top name 5} ${top cpu 5} ${top mem 5}
+${color1}${font Ubuntu:bold:size=14}TOP PROCESSES ${hr 2}${font}${color}
+${color5}${voffset 4}Name               PID      MEM%${color}
+${color4}${top_mem name 1} ${top_mem pid 1}  ${top_mem mem 1}${color}
+${top_mem name 2} ${top_mem pid 2}  ${top_mem mem 2}
+${top_mem name 3} ${top_mem pid 3}  ${top_mem mem 3}
+${top_mem name 4} ${top_mem pid 4}  ${top_mem mem 4}
+${top_mem name 5} ${top_mem pid 5}  ${top_mem mem 5}
 ]];
 CONKY_CFG
 
@@ -1297,7 +1313,7 @@ cat > "$AUTOSTART_DIR/conky.desktop" <<'CONKY_AUTO'
 Type=Application
 Name=Conky System Monitor
 Comment=Desktop performance widgets
-Exec=bash -c 'sleep 5 && conky -d'
+Exec=bash -c 'sleep 5 && conky -d -c /root/.config/conky/conky.conf'
 Hidden=false
 NoDisplay=false
 X-GNOME-Autostart-enabled=true
