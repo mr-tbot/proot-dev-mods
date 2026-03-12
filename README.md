@@ -1,6 +1,6 @@
 # Proot Dev Mods — Ubuntu Desktop on Android via Termux
 
-Run a full **XFCE desktop** with **VSCode**, **Chromium/Firefox**, **Chrome**, development tools, media editors, network utilities, **Wine**, and **cloud storage** (Google Drive & Dropbox) on Android — no root required.
+Run a full **XFCE desktop** with **VSCode**, **Chromium/Firefox**, **Chrome if on compatible chipset**, development tools, media editors, network utilities, **Wine**, and **cloud storage** (Google Drive & Dropbox) on Android — no root required.
 
 Uses `proot-distro` to install Ubuntu, then applies sandbox/GPU/keyring mods that Electron, Chromium, and Wine need to function inside proot.
 
