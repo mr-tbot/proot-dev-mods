@@ -23,6 +23,8 @@ If Proot-Dev-Mods has been useful to you — **please consider making a donation
 
 [**Click here to donate via PayPal**](https://www.paypal.com/donate/?business=7DQWLBARMM3FE&no_recurring=0&item_name=Support+the+development+and+growth+of+innovative+MR_TBOT+projects.&currency_code=USD)
 
+---
+
 ## What You Get
 
 | Category | Apps & Features |
