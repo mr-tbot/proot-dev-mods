@@ -1,4 +1,4 @@
-# Proot Dev Mods — Ubuntu Desktop on Android via Termux
+# Proot Dev Mods — Ubuntu & Development on Android via Termux
 
 Run a full **XFCE desktop** with **VSCode**, **Chromium/Firefox**, **Chrome if on compatible chipset**, development tools, media editors, network utilities, **Wine**, and **cloud storage** (Google Drive & Dropbox) on Android — no root required.
 
