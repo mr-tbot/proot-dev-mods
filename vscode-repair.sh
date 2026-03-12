@@ -167,22 +167,59 @@ printf "\n${BOLD}Phase 5: Patching .desktop files...${NC}\n\n"
 
 # VSCode updates overwrite the .desktop files and remove our proot flags.
 # We patch all Exec= lines to include the necessary flags.
+# Full proot flag set (must match the wrapper at /usr/bin/code):
+_PROOT_FLAGS="--no-sandbox --disable-gpu --disable-gpu-compositing --disable-dev-shm-usage --disable-software-rasterizer --password-store=basic --user-data-dir=/root/.vscode"
+
+_patch_desktop() {
+    local desktop_file="$1"
+    [[ -f "$desktop_file" ]] || return 1
+    [[ ! -f "${desktop_file}.bak" ]] && cp "$desktop_file" "${desktop_file}.bak"
+    # Replace every Exec= line: keep 'Exec=/path/to/code' prefix but inject
+    # our flags between the binary and the trailing args (%F, %U, etc.)
+    # Stock lines look like:  Exec=/usr/share/code/code --unity-launch %F
+    # or:                     Exec=/usr/share/code/code --new-window %F
+    # or:                     Exec=/usr/share/code/code --open-url %U
+    sed -i -E \
+        "s|^Exec=/usr/share/code/code[[:space:]].*|Exec=/usr/share/code/code ${_PROOT_FLAGS} &|" \
+        "$desktop_file" 2>/dev/null || true
+    # Clean up: the sed above may create double flag sets on re-runs.
+    # Normalize by replacing the Exec line completely based on trailing arg.
+    # Detect the tail argument pattern (e.g. %F, --new-window %F, --open-url %U)
+    while IFS= read -r line; do
+        local tail_args=""
+        if [[ "$line" =~ --open-url\ %U ]]; then
+            tail_args="--open-url %U"
+        elif [[ "$line" =~ --new-window\ %F ]]; then
+            tail_args="--new-window %F"
+        elif [[ "$line" =~ %F ]]; then
+            tail_args="%F"
+        elif [[ "$line" =~ %U ]]; then
+            tail_args="%U"
+        fi
+        # Nothing to do for non-Exec lines
+    done < <(grep '^Exec=' "$desktop_file")
+    # Simpler approach: just do targeted replacements
+    sed -i -E 's|^Exec=.*--open-url[[:space:]]+%U.*|Exec=/usr/share/code/code '"${_PROOT_FLAGS}"' --open-url %U|' "$desktop_file"
+    sed -i -E 's|^Exec=.*--new-window[[:space:]]+%F.*|Exec=/usr/share/code/code '"${_PROOT_FLAGS}"' --new-window %F|' "$desktop_file"
+    # Main Exec= (no --open-url, no --new-window) — must come last
+    sed -i -E '/--open-url|--new-window/! s|^Exec=.*%F.*|Exec=/usr/share/code/code '"${_PROOT_FLAGS}"' %F|' "$desktop_file"
+    sed -i -E '/--open-url|--new-window/! s|^Exec=.*%U.*|Exec=/usr/share/code/code '"${_PROOT_FLAGS}"' %U|' "$desktop_file"
+    ok "Patched: $(basename "$desktop_file")"
+}
 
 CODE_DESKTOP="/usr/share/applications/code.desktop"
 if [[ -f "$CODE_DESKTOP" ]]; then
-    [[ ! -f "${CODE_DESKTOP}.bak" ]] && cp "$CODE_DESKTOP" "${CODE_DESKTOP}.bak"
-    sed -i 's|^Exec=.*|Exec=/usr/share/code/code --disable-gpu --disable-gpu-compositing --no-sandbox --user-data-dir="/root/.vscode" %F|' "$CODE_DESKTOP"
-    ok "Patched: code.desktop"
+    _patch_desktop "$CODE_DESKTOP"
 else
     warn "code.desktop not found — creating it."
     mkdir -p /usr/share/applications
-    cat > "$CODE_DESKTOP" <<'CODEDESK'
+    cat > "$CODE_DESKTOP" <<CODEDESK
 [Desktop Entry]
 Type=Application
 Name=Visual Studio Code
 Comment=Code Editing. Redefined.
 GenericName=Text Editor
-Exec=/usr/share/code/code --disable-gpu --disable-gpu-compositing --no-sandbox --user-data-dir="/root/.vscode" %F
+Exec=/usr/share/code/code ${_PROOT_FLAGS} %F
 Icon=vscode
 Terminal=false
 Categories=Development;IDE;TextEditor;
@@ -193,16 +230,14 @@ Actions=new-empty-window;
 
 [Desktop Action new-empty-window]
 Name=New Empty Window
-Exec=/usr/share/code/code --disable-gpu --disable-gpu-compositing --no-sandbox --user-data-dir="/root/.vscode" --new-window %F
+Exec=/usr/share/code/code ${_PROOT_FLAGS} --new-window %F
 CODEDESK
     ok "Created: code.desktop"
 fi
 
 CODE_URL_DESKTOP="/usr/share/applications/code-url-handler.desktop"
 if [[ -f "$CODE_URL_DESKTOP" ]]; then
-    [[ ! -f "${CODE_URL_DESKTOP}.bak" ]] && cp "$CODE_URL_DESKTOP" "${CODE_URL_DESKTOP}.bak"
-    sed -i 's|^Exec=.*|Exec=/usr/share/code/code --disable-gpu --disable-gpu-compositing --no-sandbox --user-data-dir="/root/.vscode" --open-url %U|' "$CODE_URL_DESKTOP"
-    ok "Patched: code-url-handler.desktop"
+    _patch_desktop "$CODE_URL_DESKTOP"
 fi
 
 update-desktop-database /usr/share/applications 2>/dev/null || true
@@ -213,16 +248,18 @@ update-desktop-database /usr/share/applications 2>/dev/null || true
 # ══════════════════════════════════════════════════════════════════════
 printf "\n${BOLD}Phase 6: Ensuring ~/.bashrc alias...${NC}\n\n"
 
-# The alias lets users type `code .` in terminal and get proot flags
-# automatically, without needing to remember the full flag list.
+# The alias provides a fallback if /usr/bin/code gets overwritten by
+# an update before the repair script is run.  The wrapper already has
+# these flags, so this is belt-and-suspenders.
 
+_CODE_ALIAS='alias code='"'"'code --no-sandbox --disable-gpu --disable-gpu-compositing --disable-dev-shm-usage --disable-software-rasterizer --password-store=basic --user-data-dir="$HOME/.vscode"'"'"''
 if ! grep -qF 'alias code=' ~/.bashrc 2>/dev/null; then
-    cat >> ~/.bashrc <<'ALIAS'
-alias code='code --disable-gpu --disable-gpu-compositing --no-sandbox --user-data-dir="$HOME/.vscode"'
-ALIAS
+    echo "$_CODE_ALIAS" >> ~/.bashrc
     ok "Added code alias to ~/.bashrc"
 else
-    ok "~/.bashrc code alias already present"
+    # Update existing alias to include all flags
+    sed -i "/^alias code=/c\\${_CODE_ALIAS}" ~/.bashrc 2>/dev/null || true
+    ok "~/.bashrc code alias updated"
 fi
 
 
@@ -248,7 +285,8 @@ _verify "argv.json has basic store"    "grep -q 'password-store.*basic' /root/.v
 _verify "argv.json disables HW accel"  "grep -q 'disable-hardware-acceleration.*true' /root/.vscode/argv.json"
 _verify "settings.json exists"         "test -f /root/.vscode/User/settings.json"
 _verify "settings.json has sig fix"    "grep -q 'extensions.verifySignature.*false' /root/.vscode/User/settings.json"
-_verify "code.desktop patched"         "grep -q 'no-sandbox' /usr/share/applications/code.desktop 2>/dev/null"
+_verify "code.desktop has no-sandbox"  "grep -q 'no-sandbox' /usr/share/applications/code.desktop 2>/dev/null"
+_verify "code.desktop has all flags"   "grep -q 'disable-dev-shm-usage' /usr/share/applications/code.desktop 2>/dev/null"
 _verify "bashrc code alias"            "grep -qF 'alias code=' ~/.bashrc"
 
 printf "\n  ─────────────────────────────────────────────\n"

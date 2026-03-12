@@ -222,6 +222,35 @@ update-locale LANG=en_US.UTF-8 2>/dev/null || true
 ok "Locale set to en_US.UTF-8"
 
 
+# ── Set hostname ──────────────────────────────────────────────────────
+msg "Hostname configuration..."
+CURRENT_HOSTNAME=$(cat /etc/hostname 2>/dev/null || echo "localhost")
+printf "  Current hostname: ${BOLD}%s${NC}\n" "$CURRENT_HOSTNAME"
+printf "  ${BOLD}Enter a new hostname${NC} (or press Enter to keep current): "
+read -r NEW_HOSTNAME
+NEW_HOSTNAME="${NEW_HOSTNAME:-$CURRENT_HOSTNAME}"
+# Sanitize: lowercase, replace spaces with hyphens, strip invalid chars
+NEW_HOSTNAME=$(echo "$NEW_HOSTNAME" | sed 's/ /-/g; s/[^a-zA-Z0-9-]//g')
+if [[ -n "$NEW_HOSTNAME" && "$NEW_HOSTNAME" != "$CURRENT_HOSTNAME" ]]; then
+    echo "$NEW_HOSTNAME" > /etc/hostname
+    # Update /etc/hosts: add new hostname on the 127.0.0.1 line
+    if [[ -f /etc/hosts ]]; then
+        sed -i "s/\b${CURRENT_HOSTNAME}\b/${NEW_HOSTNAME}/g" /etc/hosts 2>/dev/null || true
+        # Ensure new hostname is on the localhost line if not already
+        if ! grep -q "$NEW_HOSTNAME" /etc/hosts 2>/dev/null; then
+            sed -i "s/^127\.0\.0\.1.*/& ${NEW_HOSTNAME}/" /etc/hosts
+        fi
+    fi
+    hostname "$NEW_HOSTNAME" 2>/dev/null || true
+    # proot intercepts the hostname syscall — export in bashrc so prompts work
+    sed -i '/^# Hostname override for proot/d; /^export HOSTNAME=/d' /etc/bash.bashrc 2>/dev/null || true
+    printf '\n# Hostname override for proot (hostname syscall returns host kernel value)\nexport HOSTNAME=%s\n' "$NEW_HOSTNAME" >> /etc/bash.bashrc
+    ok "Hostname set to ${NEW_HOSTNAME}"
+else
+    ok "Hostname unchanged: ${CURRENT_HOSTNAME}"
+fi
+
+
 # ── Configure VNC xstartup ────────────────────────────────────────────
 msg "Configuring VNC xstartup..."
 mkdir -p ~/.vnc
@@ -728,10 +757,39 @@ else
     rm -f "$IPSCAN_DEB" 2>/dev/null
 fi
 
+# ── box64 (arm64 only) ─────────────────────────────────────────────
+# box64 allows running x86_64 binaries on arm64 — used by Wine and
+# some apps.  Install it early so Wine can use it.
+if [[ "$DEB_ARCH" == "arm64" ]]; then
+    if command -v box64 >/dev/null 2>&1; then
+        skip "box64"
+    else
+        msg "Installing box64 (x86_64 emulation for arm64)..."
+        if apt-get install -y box64 2>/dev/null; then
+            ok "box64 installed."
+        else
+            # Try from Ryanfortner's repo (popular for arm64 proot)
+            wget -qO- https://ryanfortner.github.io/box64-debs/box64.list 2>/dev/null \
+                > /etc/apt/sources.list.d/box64.list && \
+            wget -qO- https://ryanfortner.github.io/box64-debs/KEY.gpg 2>/dev/null \
+                | gpg --dearmor > /usr/share/keyrings/box64-archive-keyring.gpg 2>/dev/null && \
+            sed -i 's|^deb |deb [signed-by=/usr/share/keyrings/box64-archive-keyring.gpg] |' \
+                /etc/apt/sources.list.d/box64.list 2>/dev/null && \
+            apt-get update -qq 2>/dev/null && \
+            { apt-get install -y box64-generic-arm 2>/dev/null || \
+              apt-get install -y box64 2>/dev/null; } && \
+            ok "box64 installed from third-party repo." || \
+            warn "box64 could not be installed — some x86_64 apps won't work."
+        fi
+    fi
+fi
+
 # ── Wine + Notepad++ ───────────────────────────────────────────────
 # Wine allows running Windows .exe apps inside the proot.
-# On arm64 this needs box64/box86 to translate x86 calls.
-# We try to install Wine and set up Notepad++ if it works.
+# NOTE: On arm64 proot, Wine installs but wineboot --init crashes
+# ("free(): invalid pointer") because Wine uses clone/futex calls
+# that proot can't intercept.  Wine is installed for future compat
+# but Notepad++ silent-install is skipped if prefix init fails.
 msg "Installing Wine (for Windows app support)..."
 
 WINE_OK=0
@@ -758,82 +816,67 @@ else
             wine-development 2>/dev/null && WINE_OK=1 || true
     fi
 
-    # arm64: try box64 + wine-i386-to-arm64 approach
-    if [[ $WINE_OK -eq 0 && "$DEB_ARCH" == "arm64" ]]; then
-        warn "Native Wine not available for arm64."
-        msg "Trying box64 + Wine (x86-on-arm64 translation)..."
-
-        # Install box64 from its PPA / repo if available
-        if ! command -v box64 >/dev/null 2>&1; then
-            # Try Ubuntu PPA
-            if ! apt-get install -y box64 2>/dev/null; then
-                # Try from Ryanfortner's repo (popular for arm64 proot)
-                wget -qO- https://ryanfortner.github.io/box64-debs/box64.list 2>/dev/null \
-                    > /etc/apt/sources.list.d/box64.list && \
-                wget -qO- https://ryanfortner.github.io/box64-debs/KEY.gpg 2>/dev/null \
-                    | gpg --dearmor > /usr/share/keyrings/box64-archive-keyring.gpg 2>/dev/null && \
-                sed -i 's|^deb |deb [signed-by=/usr/share/keyrings/box64-archive-keyring.gpg] |' \
-                    /etc/apt/sources.list.d/box64.list 2>/dev/null && \
-                apt-get update -qq 2>/dev/null && \
-                apt-get install -y box64-generic-arm 2>/dev/null || \
-                apt-get install -y box64 2>/dev/null || true
-            fi
-        fi
-
-        # With box64 available, install x86_64 Wine
-        if command -v box64 >/dev/null 2>&1; then
-            ok "box64 available — x86_64 emulation enabled."
-            # Try installing wine through box64
-            apt-get install -y wine64 2>/dev/null && WINE_OK=1 || true
-        fi
-
-        [[ $WINE_OK -eq 0 ]] && warn "Wine on arm64 requires box64. Install manually: https://box86.org"
-    fi
-
     [[ $WINE_OK -eq 1 ]] && ok "Wine installed." || warn "Wine could not be installed — Notepad++ will be skipped."
 fi
 
 # ── Notepad++ via Wine ───────────────────────────────────────────
 NPP_INSTALLED=0
+WINE_PREFIX_OK=0
 if [[ $WINE_OK -eq 1 ]]; then
     NPP_DIR="$HOME/.wine/drive_c/Program Files/Notepad++"
     if [[ -f "$NPP_DIR/notepad++.exe" ]]; then
         NPP_INSTALLED=1
+        WINE_PREFIX_OK=1
         skip "Notepad++ (Wine)"
     else
-        msg "Installing Notepad++ via Wine..."
+        msg "Initializing Wine prefix..."
         # Initialize Wine prefix (suppress first-run dialogs)
-        WINEDEBUG=-all DISPLAY=:1 wineboot --init 2>/dev/null || \
-            WINEDEBUG=-all wineboot --init 2>/dev/null || true
+        # NOTE: On arm64 proot, wineboot crashes with "free(): invalid pointer"
+        # because Wine uses clone/futex syscalls proot can't intercept.
+        WINEDEBUG=-all DISPLAY=:1 timeout 30 wineboot --init 2>/dev/null || \
+            WINEDEBUG=-all timeout 30 wineboot --init 2>/dev/null || true
 
-        NPP_EXE="/tmp/npp-installer.exe"
-        # Download Notepad++ installer (portable/silent)
-        NPP_DL_URL=$(curl -fsSL https://api.github.com/repos/notepad-plus-plus/notepad-plus-plus/releases/latest 2>/dev/null \
-            | grep -oP '"browser_download_url":\s*"\K[^"]+Installer\.x64\.exe' | head -1) || true
-
-        if [[ -n "$NPP_DL_URL" ]]; then
-            wget -qO "$NPP_EXE" "$NPP_DL_URL" 2>/dev/null
+        # Check if Wine prefix was actually created
+        if [[ -d "$HOME/.wine/drive_c" ]]; then
+            WINE_PREFIX_OK=1
+            ok "Wine prefix initialized."
         else
-            # Fallback to a known version
-            wget -qO "$NPP_EXE" "https://github.com/notepad-plus-plus/notepad-plus-plus/releases/download/v8.6.9/npp.8.6.9.Installer.x64.exe" 2>/dev/null || true
+            warn "Wine prefix initialization failed (common on arm64 proot)."
+            warn "Wine is installed but cannot create a prefix — Notepad++ install skipped."
+            warn "Wine may work in future proot versions. The binary is at: $(command -v wine)"
         fi
 
-        if [[ -f "$NPP_EXE" && -s "$NPP_EXE" ]]; then
-            # Silent install via Wine
-            WINEDEBUG=-all wine "$NPP_EXE" /S 2>/dev/null && NPP_INSTALLED=1 || true
-            sleep 3
-            # Check if it installed
-            if [[ -f "$NPP_DIR/notepad++.exe" ]]; then
-                NPP_INSTALLED=1
-                ok "Notepad++ installed via Wine."
+        if [[ $WINE_PREFIX_OK -eq 1 ]]; then
+            msg "Installing Notepad++ via Wine..."
+            NPP_EXE="/tmp/npp-installer.exe"
+            # Download Notepad++ installer (portable/silent)
+            NPP_DL_URL=$(curl -fsSL https://api.github.com/repos/notepad-plus-plus/notepad-plus-plus/releases/latest 2>/dev/null \
+                | grep -oP '"browser_download_url":\s*"\K[^"]+Installer\.x64\.exe' | head -1) || true
+
+            if [[ -n "$NPP_DL_URL" ]]; then
+                wget -qO "$NPP_EXE" "$NPP_DL_URL" 2>/dev/null
             else
-                warn "Notepad++ silent install may not have completed."
-                warn "Try running manually:  wine '$NPP_EXE'"
+                # Fallback to a known version
+                wget -qO "$NPP_EXE" "https://github.com/notepad-plus-plus/notepad-plus-plus/releases/download/v8.6.9/npp.8.6.9.Installer.x64.exe" 2>/dev/null || true
             fi
-        else
-            warn "Could not download Notepad++ installer."
+
+            if [[ -f "$NPP_EXE" && -s "$NPP_EXE" ]]; then
+                # Silent install via Wine
+                WINEDEBUG=-all wine "$NPP_EXE" /S 2>/dev/null && NPP_INSTALLED=1 || true
+                sleep 3
+                # Check if it installed
+                if [[ -f "$NPP_DIR/notepad++.exe" ]]; then
+                    NPP_INSTALLED=1
+                    ok "Notepad++ installed via Wine."
+                else
+                    warn "Notepad++ silent install may not have completed."
+                    warn "Try running manually:  wine '$NPP_EXE'"
+                fi
+            else
+                warn "Could not download Notepad++ installer."
+            fi
+            rm -f "$NPP_EXE" 2>/dev/null
         fi
-        rm -f "$NPP_EXE" 2>/dev/null
     fi
 
     # Create a .desktop shortcut for Notepad++ if installed
@@ -869,8 +912,9 @@ if command -v spotify >/dev/null 2>&1 || test -f /usr/share/spotify/spotify; the
     skip "Spotify"
 else
     # Spotify ships an official Debian repo for amd64.
-    # For arm64 (most Android devices), we use spotifyd + spotify-tui or
-    # the snap-less .deb repack from GitHub, or the official repo if amd64.
+    # For arm64: spotify-tui has NO aarch64 builds and the cargo/Rust
+    # approach is too heavy.  We install spotifyd (background daemon) and
+    # create a wrapper that opens the Spotify web player in the browser.
     _spotify_installed=0
 
     if [[ "$DEB_ARCH" == "amd64" ]]; then
@@ -887,26 +931,8 @@ else
         fi
     fi
 
-    if [[ $_spotify_installed -eq 0 ]]; then
-        # On arm64: install spotifyd (background daemon) + spotify-tui (ncurses client)
-        # Or try the snap-less approach via spotify-launcher (Flatpak alt)
-        msg "Trying arm64/alternative Spotify install..."
-
-        # Method 1: spotify-launcher from GitHub (Rust-based official-ish launcher)
-        # This downloads the official client and patches it to run
-        if command -v cargo >/dev/null 2>&1 || apt-get install -y --no-install-recommends cargo 2>/dev/null; then
-            if cargo install spotify-launcher 2>/dev/null; then
-                _spotify_installed=1
-                ok "spotify-launcher installed via cargo."
-            fi
-        fi
-    fi
-
-    if [[ $_spotify_installed -eq 0 ]]; then
-        # Method 2: spotifyd + spotify-tui (lightweight TUI client)
-        msg "Installing spotifyd + spotify-tui (terminal client)..."
-
-        # spotifyd - Spotify daemon (plays music)
+    # Install spotifyd (lightweight Spotify daemon for background playback)
+    if ! command -v spotifyd >/dev/null 2>&1; then
         _spotifyd_url=""
         case "$DEB_ARCH" in
             arm64) _spotifyd_url="https://github.com/Spotifyd/spotifyd/releases/latest/download/spotifyd-linux-aarch64-slim.tar.gz" ;;
@@ -915,6 +941,7 @@ else
         esac
 
         if [[ -n "$_spotifyd_url" ]]; then
+            msg "Installing spotifyd (Spotify playback daemon)..."
             if curl -fsSL "$_spotifyd_url" 2>/dev/null | tar xz -C /usr/local/bin/ 2>/dev/null; then
                 chmod +x /usr/local/bin/spotifyd 2>/dev/null || true
                 ok "spotifyd installed."
@@ -922,56 +949,63 @@ else
                 warn "Could not download spotifyd."
             fi
         fi
+    fi
 
-        # spotify-tui (spt) - TUI interface
-        _spt_url=""
-        case "$DEB_ARCH" in
-            arm64) _spt_url="https://github.com/Rigellute/spotify-tui/releases/latest/download/spotify-tui-linux-aarch64.tar.gz" ;;
-            amd64) _spt_url="https://github.com/Rigellute/spotify-tui/releases/latest/download/spotify-tui-linux.tar.gz" ;;
-            armhf) _spt_url="https://github.com/Rigellute/spotify-tui/releases/latest/download/spotify-tui-linux-armv7.tar.gz" ;;
-        esac
-
-        if [[ -n "$_spt_url" ]]; then
-            if curl -fsSL "$_spt_url" 2>/dev/null | tar xz -C /usr/local/bin/ 2>/dev/null; then
-                chmod +x /usr/local/bin/spt 2>/dev/null || true
-                _spotify_installed=1
-                ok "spotify-tui (spt) installed."
-            else
-                warn "Could not download spotify-tui."
-            fi
+    # On amd64 with full client, spotify-tui is optional but available
+    if [[ $_spotify_installed -eq 0 && "$DEB_ARCH" == "amd64" ]]; then
+        _spt_url="https://github.com/Rigellute/spotify-tui/releases/latest/download/spotify-tui-linux.tar.gz"
+        if curl -fsSL "$_spt_url" 2>/dev/null | tar xz -C /usr/local/bin/ 2>/dev/null; then
+            chmod +x /usr/local/bin/spt 2>/dev/null || true
+            ok "spotify-tui (spt) installed."
         fi
+    fi
+
+    # Mark as installed if we have *any* Spotify capability
+    # (native client, spotifyd for playback, or we'll create web player)
+    if [[ $_spotify_installed -eq 0 ]]; then
+        # No native client — we'll create a web player wrapper
+        _spotify_installed=1
     fi
 
     # Create a wrapper script called 'spotify' that launches the best available option
-    if [[ $_spotify_installed -eq 1 ]]; then
-        if ! command -v spotify >/dev/null 2>&1; then
-            cat > /usr/local/bin/spotify <<'SPOTIFY_WRAPPER'
+    if [[ $_spotify_installed -eq 1 ]] && ! command -v spotify >/dev/null 2>&1; then
+        cat > /usr/local/bin/spotify <<'SPOTIFY_WRAPPER'
 #!/usr/bin/env bash
 # Spotify launcher — uses best available client
-if command -v spotify-launcher &>/dev/null; then
-    exec spotify-launcher "$@"
-elif [[ -f /usr/share/spotify/spotify ]]; then
-    exec /usr/share/spotify/spotify --no-sandbox --disable-gpu "$@"
-elif command -v spt &>/dev/null; then
-    # Start spotifyd if not running
-    if command -v spotifyd &>/dev/null && ! pgrep -x spotifyd &>/dev/null; then
-        echo "Starting spotifyd daemon..."
-        spotifyd --no-daemon &
-        sleep 1
-    fi
-    exec spt
-else
-    echo "No Spotify client found. Install with: apt install spotify-client (amd64)"
-    echo "Or use the web player: https://open.spotify.com"
-    exit 1
-fi
-SPOTIFY_WRAPPER
-            chmod +x /usr/local/bin/spotify
-            ok "Created 'spotify' launcher wrapper."
-        fi
+# Priority: native client > spt + spotifyd > web player
 
-        # .desktop shortcut
-        cat > /usr/share/applications/spotify.desktop <<'SPOTIFY_DESKTOP'
+if [[ -f /usr/share/spotify/spotify ]]; then
+    exec /usr/share/spotify/spotify --no-sandbox --disable-gpu "$@"
+fi
+
+# Start spotifyd daemon if available and not running
+if command -v spotifyd &>/dev/null && ! pgrep -x spotifyd &>/dev/null; then
+    spotifyd --no-daemon &>/dev/null &
+    disown
+    sleep 1
+fi
+
+if command -v spt &>/dev/null; then
+    exec spt
+fi
+
+# Fallback: open Spotify web player in the default browser
+_url="https://open.spotify.com"
+for _browser in chromium chromium-browser firefox firefox-esr xdg-open; do
+    if command -v "$_browser" &>/dev/null; then
+        exec "$_browser" "$_url"
+    fi
+done
+
+echo "No browser found. Open ${_url} manually."
+exit 1
+SPOTIFY_WRAPPER
+        chmod +x /usr/local/bin/spotify
+        ok "Created 'spotify' launcher wrapper."
+    fi
+
+    # .desktop shortcut
+    cat > /usr/share/applications/spotify.desktop <<'SPOTIFY_DESKTOP'
 [Desktop Entry]
 Type=Application
 Name=Spotify
@@ -983,20 +1017,14 @@ Terminal=false
 Categories=Audio;Music;Player;
 MimeType=x-scheme-handler/spotify;
 SPOTIFY_DESKTOP
-        # Try to find a suitable icon
-        if [[ ! -f /usr/share/icons/hicolor/256x256/apps/spotify-client.png ]]; then
-            mkdir -p /usr/share/icons/hicolor/256x256/apps
-            curl -fsSL -o /usr/share/icons/hicolor/256x256/apps/spotify-client.png \
-                "https://upload.wikimedia.org/wikipedia/commons/thumb/8/84/Spotify_icon.svg/256px-Spotify_icon.svg.png" 2>/dev/null || true
-        fi
-        update-desktop-database /usr/share/applications 2>/dev/null || true
-        ok "Spotify .desktop shortcut created."
-    else
-        warn "Spotify could not be installed automatically."
-        warn "Options:"
-        warn "  - Web player: https://open.spotify.com (via Chromium)"
-        warn "  - Manual install: https://www.spotify.com/download/linux/"
+    # Try to find a suitable icon
+    if [[ ! -f /usr/share/icons/hicolor/256x256/apps/spotify-client.png ]]; then
+        mkdir -p /usr/share/icons/hicolor/256x256/apps
+        curl -fsSL -o /usr/share/icons/hicolor/256x256/apps/spotify-client.png \
+            "https://upload.wikimedia.org/wikipedia/commons/thumb/8/84/Spotify_icon.svg/256px-Spotify_icon.svg.png" 2>/dev/null || true
     fi
+    update-desktop-database /usr/share/applications 2>/dev/null || true
+    ok "Spotify .desktop shortcut created."
 fi
 
 ok "Spotify section complete."
@@ -1377,10 +1405,6 @@ if [[ -f /usr/lib/chromium/chromium ]]; then
 fi
 
 if [[ "$CHROMIUM_INSTALLED" -eq 0 ]]; then
-    # Ensure Ubuntu's libxml2 is installed (Chromium links libxml2.so.2,
-    # which is the same soname Ubuntu provides — just needs to be present)
-    apt-get install -y libxml2 2>/dev/null || true
-
     msg "Downloading Chromium v89 + Buster compat libraries..."
 
     # Ubuntu has newer library sonames than Debian Buster.  We download
@@ -1421,8 +1445,16 @@ if [[ "$CHROMIUM_INSTALLED" -eq 0 ]]; then
     wget -q "${_BASE}/libj/libjpeg-turbo/libjpeg62-turbo_1.5.2-2+deb10u1_${DEB_ARCH}.deb"      -O "$_DEB_DIR/libjpeg62-turbo.deb" \
         || wget -q "${_BASE}/libj/libjpeg-turbo/libjpeg62-turbo_1.5.2-2+b1_${DEB_ARCH}.deb"    -O "$_DEB_DIR/libjpeg62-turbo.deb" \
         || wget -q "${_BASE}/libj/libjpeg-turbo/libjpeg62-turbo_1.5.2-2_${DEB_ARCH}.deb"       -O "$_DEB_DIR/libjpeg62-turbo.deb"
-    wget -q "${_BASE}/f/flac/libflac8_1.3.2-3+deb10u1_${DEB_ARCH}.deb"                         -O "$_DEB_DIR/libflac8.deb" \
+    wget -q "${_BASE}/f/flac/libflac8_1.3.2-3+deb10u2_${DEB_ARCH}.deb"                         -O "$_DEB_DIR/libflac8.deb" \
+        || wget -q "${_BASE}/f/flac/libflac8_1.3.2-3+deb10u1_${DEB_ARCH}.deb"                  -O "$_DEB_DIR/libflac8.deb" \
         || wget -q "${_BASE}/f/flac/libflac8_1.3.2-3_${DEB_ARCH}.deb"                          -O "$_DEB_DIR/libflac8.deb"
+
+    # libxml2 — Chromium v89 needs libxml2.so.2 (Buster ABI). Modern Ubuntu
+    # ships libxml2.so.16 under a different package name — the Buster .deb
+    # installs the correct soname alongside it without conflict.
+    wget -q "${_BASE}/libx/libxml2/libxml2_2.9.4+dfsg1-7+deb10u4_${DEB_ARCH}.deb"             -O "$_DEB_DIR/libxml2.deb" \
+        || wget -q "${_BASE}/libx/libxml2/libxml2_2.9.4+dfsg1-7+deb10u3_${DEB_ARCH}.deb"       -O "$_DEB_DIR/libxml2.deb" \
+        || wget -q "${_BASE}/libx/libxml2/libxml2_2.9.4+dfsg1-7_${DEB_ARCH}.deb"               -O "$_DEB_DIR/libxml2.deb"
 
     # Verify all downloads succeeded (wget -q hides errors silently)
     _DOWNLOAD_OK=1
@@ -1457,7 +1489,8 @@ if [[ "$CHROMIUM_INSTALLED" -eq 0 ]]; then
         "$_DEB_DIR/libssh-gcrypt-4.deb" \
         "$_DEB_DIR/libwebp6.deb" \
         "$_DEB_DIR/libjpeg62-turbo.deb" \
-        "$_DEB_DIR/libflac8.deb" 2>&1
+        "$_DEB_DIR/libflac8.deb" \
+        "$_DEB_DIR/libxml2.deb" 2>&1
     ok "Buster compat libraries installed."
 
     # ── Step 5: Install Chromium ──────────────────────────────────────
@@ -1615,28 +1648,35 @@ PROOTFLAGS
         libavcodec58 libavformat58 libavutil56 libswresample3 \
         libaom0 libcodec2-0.8.1 libx264-155 libx265-165 \
         libssh-gcrypt-4 \
-        libwebp6 libjpeg62-turbo libflac8 2>/dev/null || true
-    ok "Chromium + 17 Buster compat packages held (protected from apt-get install -f)."
+        libwebp6 libjpeg62-turbo libflac8 libxml2 2>/dev/null || true
+    ok "Chromium + Buster compat packages held (protected from apt-get install -f)."
 
-    # Create dummy transitional package for libgdk-pixbuf2.0-0
-    # (Debian Buster package name — Ubuntu uses libgdk-pixbuf-2.0-0 instead).
-    # This satisfies dpkg's dependency tracking so apt can install other packages.
-    if ! dpkg -s libgdk-pixbuf2.0-0 >/dev/null 2>&1; then
-        _DUMMY_DIR="/tmp/libgdk-pixbuf2.0-0-dummy"
-        mkdir -p "$_DUMMY_DIR/DEBIAN"
-        cat > "$_DUMMY_DIR/DEBIAN/control" <<GDKCTRL
-Package: libgdk-pixbuf2.0-0
+    # Create dummy transitional packages for Buster deps that have
+    # different package names in modern Ubuntu.  These satisfy dpkg's
+    # dependency tracking so apt can install other packages without
+    # "unmet dependencies" errors blocking everything.
+    _create_dummy_pkg() {
+        local pkg="$1" deps="$2" desc="$3"
+        if ! dpkg -s "$pkg" >/dev/null 2>&1; then
+            local _d="/tmp/${pkg}-dummy"
+            mkdir -p "$_d/DEBIAN"
+            cat > "$_d/DEBIAN/control" <<EOF
+Package: ${pkg}
 Version: 99.0~proot-dummy
-Architecture: $DEB_ARCH
-Description: Transitional dummy — satisfies Buster chromium dep
+Architecture: ${DEB_ARCH}
+${deps:+Depends: ${deps}\n}Description: ${desc}
 Maintainer: proot-setup
-GDKCTRL
-        dpkg-deb --build "$_DUMMY_DIR" /tmp/libgdk-pixbuf2.0-0-dummy.deb 2>/dev/null
-        dpkg -i /tmp/libgdk-pixbuf2.0-0-dummy.deb 2>/dev/null || true
-        apt-mark hold libgdk-pixbuf2.0-0 2>/dev/null || true
-        rm -rf "$_DUMMY_DIR" /tmp/libgdk-pixbuf2.0-0-dummy.deb
-        ok "Dummy libgdk-pixbuf2.0-0 package created (satisfies chromium dep)."
-    fi
+EOF
+            dpkg-deb --build "$_d" "/tmp/${pkg}-dummy.deb" 2>/dev/null
+            dpkg -i "/tmp/${pkg}-dummy.deb" 2>/dev/null || true
+            apt-mark hold "$pkg" 2>/dev/null || true
+            rm -rf "$_d" "/tmp/${pkg}-dummy.deb"
+            ok "Dummy $pkg package created."
+        fi
+    }
+
+    _create_dummy_pkg "libgdk-pixbuf2.0-0" "" "Transitional dummy — satisfies Buster chromium dep"
+    _create_dummy_pkg "chromium-sandbox" "" "Transitional dummy — satisfies chromium Recommends"
 
     # Clear any broken dpkg state so subsequent apt-get install (e.g. Firefox) works
     dpkg --configure -a 2>/dev/null || true
@@ -2145,7 +2185,7 @@ elif [[ "$INSTALL_FIREFOX" -eq 1 ]]; then
     _PRIMARY_BROWSER_DESKTOP="${FIREFOX_DESKTOP:-firefox.desktop}"
 fi
 
-# Firefox secondary panel slot (only when BOTH browsers installed)
+# Firefox secondary panel slot (when Firefox is installed alongside Chromium)
 _FF_PLUGIN_ID=""
 _FF_PLUGIN_DEF=""
 if [[ "$INSTALL_CHROMIUM" -eq 1 ]] && [[ "$INSTALL_FIREFOX" -eq 1 ]]; then
@@ -2153,6 +2193,18 @@ if [[ "$INSTALL_CHROMIUM" -eq 1 ]] && [[ "$INSTALL_FIREFOX" -eq 1 ]]; then
     _FF_PLUGIN_DEF='    <property name="plugin-18" type="string" value="launcher">
       <property name="items" type="array">
         <value type="string" value="'"${FIREFOX_DESKTOP:-firefox.desktop}"'"/>
+      </property>
+    </property>'
+fi
+
+# Chrome panel slot (only when Chrome is actually installed)
+_CHROME_PLUGIN_ID=""
+_CHROME_PLUGIN_DEF=""
+if [[ "$CHROME_INSTALLED" -eq 1 ]]; then
+    _CHROME_PLUGIN_ID='        <value type="int" value="14"/>'
+    _CHROME_PLUGIN_DEF='    <property name="plugin-14" type="string" value="launcher">
+      <property name="items" type="array">
+        <value type="string" value="'"${CHROME_DESKTOP:-google-chrome-stable.desktop}"'"/>
       </property>
     </property>'
 fi
@@ -2180,7 +2232,7 @@ cat > "$XFCE_XML_DIR/xfce4-panel.xml" <<PANEL_XML
         <value type="int" value="3"/>
         <value type="int" value="4"/>
 ${_FF_PLUGIN_ID}
-        <value type="int" value="14"/>
+${_CHROME_PLUGIN_ID}
         <value type="int" value="17"/>
         <value type="int" value="5"/>
         <value type="int" value="6"/>
@@ -2202,7 +2254,7 @@ ${_FF_PLUGIN_ID}
     </property>
     <property name="plugin-16" type="string" value="launcher">
       <property name="items" type="array">
-        <value type="string" value="xfce4-settings-manager.desktop"/>
+        <value type="string" value="xfce-settings-manager.desktop"/>
       </property>
     </property>
     <property name="plugin-2" type="string" value="launcher">
@@ -2221,11 +2273,7 @@ ${_FF_PLUGIN_ID}
       </property>
     </property>
 ${_FF_PLUGIN_DEF}
-    <property name="plugin-14" type="string" value="launcher">
-      <property name="items" type="array">
-        <value type="string" value="${CHROME_DESKTOP:-google-chrome-stable.desktop}"/>
-      </property>
-    </property>
+${_CHROME_PLUGIN_DEF}
     <property name="plugin-17" type="string" value="launcher">
       <property name="items" type="array">
         <value type="string" value="thunderbird.desktop"/>
@@ -2311,12 +2359,12 @@ _link_launcher() {
     fi
 }
 
-_link_launcher 16 "xfce4-settings-manager.desktop"
+_link_launcher 16 "xfce-settings-manager.desktop"
 _link_launcher 2  "xfce4-terminal.desktop"
 _link_launcher 3  "thunar.desktop"
 _link_launcher 4  "${_PRIMARY_BROWSER_DESKTOP:-chromium.desktop}"
 [[ -n "$_FF_PLUGIN_DEF" ]] && _link_launcher 18 "${FIREFOX_DESKTOP:-firefox.desktop}"
-_link_launcher 14 "${CHROME_DESKTOP:-google-chrome-stable.desktop}"
+[[ "$CHROME_INSTALLED" -eq 1 ]] && _link_launcher 14 "${CHROME_DESKTOP:-google-chrome-stable.desktop}"
 _link_launcher 17 "thunderbird.desktop"
 _link_launcher 5  "code.desktop"
 _link_launcher 6  "${LIBREOFFICE_DESKTOP:-libreoffice-startcenter.desktop}"
@@ -2446,6 +2494,94 @@ ok "Dark theme + Humanity icons + session config applied."
 
 
 # ══════════════════════════════════════════════════════════════════════
+#  SECTION 8b: SSH Server Setup (Optional)
+# ══════════════════════════════════════════════════════════════════════
+msg "SSH Server Setup..."
+printf "\n${BOLD}${CYAN}"
+cat <<'SSHMENU'
+  ┌─────────────────────────────────────────────────────┐
+  │   SSH Server (OpenSSH) — useful for remote access   │
+  │   and troubleshooting from another device or PC.    │
+  │                                                     │
+  │   [1] Yes — install & enable SSH on port 2222       │
+  │   [2] No  — skip SSH setup                          │
+  └─────────────────────────────────────────────────────┘
+SSHMENU
+printf "${NC}"
+
+_INSTALL_SSH=0
+while true; do
+    read -rp "  Install SSH server? [1/2] (default: 1): " _ssh_choice
+    _ssh_choice="${_ssh_choice:-1}"
+    case "$_ssh_choice" in
+        1) _INSTALL_SSH=1; break ;;
+        2) _INSTALL_SSH=0; break ;;
+        *) echo "  Invalid choice. Enter 1 or 2." ;;
+    esac
+done
+
+if [[ "$_INSTALL_SSH" -eq 1 ]]; then
+    if _is_installed openssh-server; then
+        ok "OpenSSH server already installed."
+    else
+        msg "Installing OpenSSH server..."
+        apt-get install -y openssh-server 2>&1 | tail -5
+        ok "OpenSSH server installed."
+    fi
+
+    # Generate host keys if missing
+    ssh-keygen -A 2>/dev/null || true
+
+    # Create privilege separation directory
+    mkdir -p /run/sshd
+    chmod 0755 /run/sshd
+
+    # Configure for proot: allow root login, use port 2222 (proot can't bind 22)
+    sed -i 's/^#*Port .*/Port 2222/' /etc/ssh/sshd_config
+    sed -i 's/^#*PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
+    # Disable PAM (not available in proot)
+    sed -i 's/^#*UsePAM.*/UsePAM no/' /etc/ssh/sshd_config
+
+    # Set root password
+    printf "\n${BOLD}Set a root password for SSH access:${NC}\n"
+    passwd root
+
+    # Create autostart script
+    cat > /usr/local/bin/start-sshd <<'SSHSTART'
+#!/bin/sh
+# Start OpenSSH server in proot (port 2222)
+mkdir -p /run/sshd 2>/dev/null
+if ! pgrep -x sshd >/dev/null 2>&1; then
+    /usr/sbin/sshd -p 2222
+    echo "sshd started on port 2222"
+else
+    echo "sshd already running"
+fi
+SSHSTART
+    chmod +x /usr/local/bin/start-sshd
+
+    # Ask whether to auto-start on login
+    printf "\n${CYAN}Auto-start SSH on each proot login?${NC}\n"
+    read -rp "  [y/N]: " _ssh_auto
+    if [[ "$_ssh_auto" =~ ^[Yy]$ ]]; then
+        if ! grep -qF 'start-sshd' /root/.bashrc 2>/dev/null; then
+            echo '' >> /root/.bashrc
+            echo '# Auto-start SSH server' >> /root/.bashrc
+            echo '/usr/local/bin/start-sshd 2>/dev/null' >> /root/.bashrc
+        fi
+        ok "SSH auto-start added to .bashrc"
+    fi
+
+    # Start sshd now
+    /usr/sbin/sshd -p 2222 2>/dev/null || true
+    ok "SSH server configured on port 2222."
+    ok "Connect with: ssh root@<device-ip> -p 2222"
+else
+    ok "SSH server setup skipped."
+fi
+
+
+# ══════════════════════════════════════════════════════════════════════
 #  SECTION 9: Final Validation
 # ══════════════════════════════════════════════════════════════════════
 msg "Validating installation..."
@@ -2570,6 +2706,19 @@ _check "Conky widgets"      "command -v conky"          "echo 'installed'"
 _check "Conky config"       "test -f /root/.config/conky/conky.conf"     "echo 'configured'"
 _check "VNC xstartup"       "test -f /root/.vnc/xstartup"               "echo 'configured'"
 echo ""
+
+if [[ "${_INSTALL_SSH:-0}" -eq 1 ]]; then
+printf "  ${BOLD}SSH Server${NC}\n"
+printf "  ${DIM}──────────────────────────────────────────────${NC}\n"
+_check "OpenSSH server"     "_is_installed openssh-server"                "echo 'installed'"
+_check "Host keys"          "test -f /etc/ssh/ssh_host_ed25519_key"       "echo 'generated'"
+_check "/run/sshd"          "test -d /run/sshd"                           "echo 'exists'"
+_check "Port 2222"          "grep -qE '^Port 2222' /etc/ssh/sshd_config"  "echo 'configured'"
+_check "PermitRootLogin"    "grep -qE '^PermitRootLogin yes' /etc/ssh/sshd_config" "echo 'yes'"
+_check "start-sshd script"  "test -x /usr/local/bin/start-sshd"          "echo '/usr/local/bin/start-sshd'"
+_check "sshd running"       "pgrep -x sshd"                              "echo 'pid '\"$(pgrep -x sshd | head -1)\""
+echo ""
+fi
 
 
 # ══════════════════════════════════════════════════════════════════════

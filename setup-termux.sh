@@ -447,6 +447,11 @@ proot-distro login ubuntu --shared-tmp $PROOT_ARGS -- bash -c "
     export DISPLAY=:${DISPLAY_NUM}
     export PULSE_SERVER=127.0.0.1
 
+    # Start SSH server if installed (for remote troubleshooting)
+    if [[ -x /usr/local/bin/start-sshd ]]; then
+        /usr/local/bin/start-sshd 2>/dev/null || true
+    fi
+
     # Start dbus if available
     mkdir -p /tmp/dbus-session 2>/dev/null || true
     export DBUS_SESSION_BUS_ADDRESS=unix:path=/tmp/dbus-session-bus
@@ -546,6 +551,11 @@ fi
 proot-distro login ubuntu --shared-tmp $PROOT_ARGS -- bash -c "
     export DISPLAY=:0
     export PULSE_SERVER=127.0.0.1
+
+    # Start SSH server if installed (for remote troubleshooting)
+    if [[ -x /usr/local/bin/start-sshd ]]; then
+        /usr/local/bin/start-sshd 2>/dev/null || true
+    fi
 
     # Start dbus
     export DBUS_SESSION_BUS_ADDRESS=unix:path=/tmp/dbus-session-bus
@@ -683,6 +693,11 @@ cat <<EOF
     Inside proot, PULSE_SERVER=127.0.0.1 connects to it.
     Works with both VNC and Termux:X11 display methods.
     Use the volume icon in the panel or 'pavucontrol' for mixing.
+
+  SSH (if enabled during setup-proot.sh):
+    SSH server auto-starts on port 2222 with the desktop.
+    Connect from another device: ssh root@<device-ip> -p 2222
+    Manually start/stop: inside proot, run 'start-sshd'
 
   USB:
     USB OTG devices are bind-mounted into proot automatically.

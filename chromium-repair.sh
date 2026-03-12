@@ -200,9 +200,9 @@ printf "\n${BOLD}Phase 3: Preparing Chromium v89 download...${NC}\n\n"
 rm -f /etc/apt/sources.list.d/debian-chromium.sources /etc/apt/sources.list.d/debian-chromium.list 2>/dev/null || true
 ok "Buster repo cleanup complete"
 
-# Ensure Ubuntu's libxml2 is installed (Chromium links libxml2.so.2,
-# which is the same soname Ubuntu provides — just needs to be present)
-apt-get install -y libxml2 2>/dev/null || true
+# NOTE: Ubuntu 25.10+ renamed libxml2 → libxml2-16 (soname .so.16 instead of .so.2).
+# Chromium v89 needs libxml2.so.2, so we install Buster's libxml2 .deb below.
+# Do NOT install Ubuntu's libxml2 here — it won't provide the right soname.
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -250,9 +250,16 @@ wget -q "${_BASE}/libj/libjpeg-turbo/libjpeg62-turbo_1.5.2-2+deb10u1_${DEB_ARCH}
     || wget -q "${_BASE}/libj/libjpeg-turbo/libjpeg62-turbo_1.5.2-2+b1_${DEB_ARCH}.deb"    -O "$_DEB_DIR/libjpeg62-turbo.deb" \
     || wget -q "${_BASE}/libj/libjpeg-turbo/libjpeg62-turbo_1.5.2-2_${DEB_ARCH}.deb"       -O "$_DEB_DIR/libjpeg62-turbo.deb"
 [[ -s "$_DEB_DIR/libjpeg62-turbo.deb" ]] && ok "libjpeg62-turbo" || err "libjpeg62-turbo download failed"
-wget -q "${_BASE}/f/flac/libflac8_1.3.2-3+deb10u1_${DEB_ARCH}.deb"                         -O "$_DEB_DIR/libflac8.deb" \
+wget -q "${_BASE}/f/flac/libflac8_1.3.2-3+deb10u2_${DEB_ARCH}.deb"                         -O "$_DEB_DIR/libflac8.deb" \
+    || wget -q "${_BASE}/f/flac/libflac8_1.3.2-3+deb10u1_${DEB_ARCH}.deb"                  -O "$_DEB_DIR/libflac8.deb" \
     || wget -q "${_BASE}/f/flac/libflac8_1.3.2-3_${DEB_ARCH}.deb"                          -O "$_DEB_DIR/libflac8.deb"
 [[ -s "$_DEB_DIR/libflac8.deb" ]] && ok "libflac8" || err "libflac8 download failed"
+
+# libxml2 from Buster (provides libxml2.so.2 — Ubuntu 25.10 ships .so.16)
+wget -q "${_BASE}/libx/libxml2/libxml2_2.9.4+dfsg1-7+deb10u4_${DEB_ARCH}.deb"              -O "$_DEB_DIR/libxml2.deb" \
+    || wget -q "${_BASE}/libx/libxml2/libxml2_2.9.4+dfsg1-7+deb10u3_${DEB_ARCH}.deb"      -O "$_DEB_DIR/libxml2.deb" \
+    || wget -q "${_BASE}/libx/libxml2/libxml2_2.9.4+dfsg1-7_${DEB_ARCH}.deb"               -O "$_DEB_DIR/libxml2.deb"
+[[ -s "$_DEB_DIR/libxml2.deb" ]] && ok "libxml2 (Buster)" || err "libxml2 download failed"
 
 # Verify all downloads (wget -q hides failures silently)
 _DOWNLOAD_OK=1
@@ -291,7 +298,8 @@ dpkg --force-depends -i \
     "$_DEB_DIR/libssh-gcrypt-4.deb" \
     "$_DEB_DIR/libwebp6.deb" \
     "$_DEB_DIR/libjpeg62-turbo.deb" \
-    "$_DEB_DIR/libflac8.deb" 2>&1
+    "$_DEB_DIR/libflac8.deb" \
+    "$_DEB_DIR/libxml2.deb" 2>&1
 ok "Buster compat libraries installed"
 
 
@@ -459,28 +467,36 @@ apt-mark hold \
     libavcodec58 libavformat58 libavutil56 libswresample3 \
     libaom0 libcodec2-0.8.1 libx264-155 libx265-165 \
     libssh-gcrypt-4 \
-    libwebp6 libjpeg62-turbo libflac8 2>/dev/null || true
-ok "Chromium + 17 Buster compat packages held (protected from apt-get install -f)"
+    libwebp6 libjpeg62-turbo libflac8 libxml2 2>/dev/null || true
+ok "Chromium + 18 Buster compat packages held (protected from apt-get install -f)"
 
-# Create dummy transitional package for libgdk-pixbuf2.0-0
-# (Debian Buster package name — Ubuntu uses libgdk-pixbuf-2.0-0 instead).
-# This satisfies dpkg's dependency tracking so apt can install other packages.
-if ! dpkg -s libgdk-pixbuf2.0-0 >/dev/null 2>&1; then
-    _DUMMY_DIR="/tmp/libgdk-pixbuf2.0-0-dummy"
-    mkdir -p "$_DUMMY_DIR/DEBIAN"
-    cat > "$_DUMMY_DIR/DEBIAN/control" <<GDKCTRL
-Package: libgdk-pixbuf2.0-0
+# Create dummy transitional packages for Buster-era dependencies that
+# don't exist in modern Ubuntu (different package names / sonames).
+# These satisfy dpkg's dependency tracking so apt can install other packages.
+_create_dummy_pkg() {
+    local name="$1"
+    if dpkg -s "$name" >/dev/null 2>&1; then
+        ok "Dummy $name already present"
+        return 0
+    fi
+    local dir="/tmp/${name}-dummy"
+    mkdir -p "$dir/DEBIAN"
+    cat > "$dir/DEBIAN/control" <<DUMMYCTRL
+Package: ${name}
 Version: 99.0~proot-dummy
-Architecture: $DEB_ARCH
+Architecture: ${DEB_ARCH}
 Description: Transitional dummy — satisfies Buster chromium dep
 Maintainer: proot-setup
-GDKCTRL
-    dpkg-deb --build "$_DUMMY_DIR" /tmp/libgdk-pixbuf2.0-0-dummy.deb 2>/dev/null
-    dpkg -i /tmp/libgdk-pixbuf2.0-0-dummy.deb 2>/dev/null || true
-    apt-mark hold libgdk-pixbuf2.0-0 2>/dev/null || true
-    rm -rf "$_DUMMY_DIR" /tmp/libgdk-pixbuf2.0-0-dummy.deb
-    ok "Dummy libgdk-pixbuf2.0-0 package created (satisfies chromium dep)."
-fi
+DUMMYCTRL
+    dpkg-deb --build "$dir" "/tmp/${name}-dummy.deb" 2>/dev/null
+    dpkg -i "/tmp/${name}-dummy.deb" 2>/dev/null || true
+    apt-mark hold "$name" 2>/dev/null || true
+    rm -rf "$dir" "/tmp/${name}-dummy.deb"
+    ok "Dummy $name package created."
+}
+
+_create_dummy_pkg libgdk-pixbuf2.0-0
+_create_dummy_pkg chromium-sandbox
 
 # Clear any broken dpkg state so subsequent apt-get install (e.g. Firefox) works
 dpkg --configure -a 2>/dev/null || true

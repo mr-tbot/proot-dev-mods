@@ -393,6 +393,17 @@ Tiered install — tries official repo first (amd64), then spotify-launcher via 
 - Reports what's present and what's missing
 - Prints helpful next-steps and expected harmless warnings
 
+#### Section 8b: SSH Server (Optional)
+- Interactive prompt: install OpenSSH server? (yes/no)
+- Configures sshd for proot: port 2222, PermitRootLogin yes, UsePAM no
+- Generates host keys, creates `/run/sshd`
+- Prompts user to set root password
+- Creates `/usr/local/bin/start-sshd` helper script
+- Optional: auto-start SSH on each proot login (added to `.bashrc`)
+- VNC/X11 launchers also auto-start sshd if installed
+- **Connect from another device**: `ssh root@<device-ip> -p 2222`
+- **Note**: proot can't bind port 22, so port 2222 is used instead
+
 ### Running
 
 ```bash
